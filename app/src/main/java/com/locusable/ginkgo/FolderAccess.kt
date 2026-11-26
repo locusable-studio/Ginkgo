@@ -35,10 +35,10 @@ internal data class FolderItem(
         else -> null
     }
 
-    fun viewIntent(): Intent = Intent(Intent.ACTION_VIEW)
-        .setDataAndType(uri, fileMime(location.name, mimeType))
+    fun viewIntent(readUri: Uri = uri): Intent = Intent(Intent.ACTION_VIEW)
+        .setDataAndType(readUri, fileMime(location.name, mimeType))
         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        .apply { clipData = ClipData.newRawUri(location.name, uri) }
+        .apply { clipData = ClipData.newRawUri(location.name, readUri) }
 }
 
 internal fun fileMime(name: String, provided: String = ""): String = when (val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {

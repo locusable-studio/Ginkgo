@@ -70,6 +70,7 @@ class InkActivity : Activity() {
         add(Page.SETTINGS)
     }
     private var page = Page.HOME
+    private var renderedPages = emptyList<Page>()
     private var appPage = 0
     private var folderPage = 0
     private var folderTrail = emptyList<FolderLocation>()
@@ -116,7 +117,10 @@ class InkActivity : Activity() {
         }
         prefs.saveFolder(selected)
         boundFolder = selected
-        if (previous != null && previous.uri != selected.uri) folderAccess.release(previous.uri)
+        if (previous != null && previous.uri != selected.uri) {
+            folderAccess.release(previous.uri)
+            if (previous.isLocal) LegacyFolders.clearReaderLinks(this)
+        }
         folderRequest++
         folderTrail = listOf(selected.root)
         folderPage = 0
@@ -152,7 +156,9 @@ class InkActivity : Activity() {
     private fun refresh() {
         val current = catalog.apps()
         prefs.seedPins(current)
-        if (body == null || apps != current || page == Page.SETTINGS || (page == Page.FOLDER && folderOrderDirty)) {
+        // Xiaomi may retain a HOME task and a separate launcher-entry task in the same process.
+        if (body == null || renderedPages != visiblePages || apps != current || page == Page.SETTINGS ||
+            (page == Page.FOLDER && folderOrderDirty)) {
             apps = current
             render(scrollY = body?.scrollY ?: 0)
         }
@@ -167,6 +173,8 @@ class InkActivity : Activity() {
     }
 
     private fun render(scrollY: Int = 0) {
+        val pages = visiblePages
+        if (page !in pages) page = Page.HOME
         val root = column().apply { setBackgroundColor(Color.WHITE) }
         val panel = column().apply { setPadding(dp(PAGE_INSET_DP), 0, dp(PAGE_INSET_DP), 0) }
         root.addView(panel, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
@@ -197,8 +205,9 @@ class InkActivity : Activity() {
             Page.ABOUT -> fillAbout(content)
             Page.SETTINGS -> fillSettings(content)
         }
-        root.addView(footer(), LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        root.addView(footer(pages), LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         setContentView(root)
+        renderedPages = pages
         covers.show(if (inFolder) boundFolder else null, coverTargets, sort, opened) { location ->
             mosaicRevisions[location.id] ?: 0
         }
@@ -458,13 +467,16 @@ class InkActivity : Activity() {
         if (item.isDirectory) {
             prefs.recordFolderOpen(item.location)
             navigateFolder(folderTrail + item.location)
-        } else if (tryStart(item.viewIntent())) {
-            prefs.recordFolderOpen(item.location)
-            folderTrail.lastOrNull()?.id?.let { id -> mosaicRevisions[id] = (mosaicRevisions[id] ?: 0) + 1 }
-            folderOrderDirty = prefs.folderSort == FolderSort.LAST_OPENED
-        } else {
-            toast("没有应用能打开此文件")
+            return
         }
+        val readerUri = if (boundFolder?.isLocal == true) LegacyFolders.readerUri(this, item) else item.uri
+        if (!tryStart(item.viewIntent(readerUri))) {
+            toast("没有应用能打开此文件")
+            return
+        }
+        prefs.recordFolderOpen(item.location)
+        folderTrail.lastOrNull()?.id?.let { id -> mosaicRevisions[id] = (mosaicRevisions[id] ?: 0) + 1 }
+        folderOrderDirty = prefs.folderSort == FolderSort.LAST_OPENED
     }
 
     private fun folderSortButton(sort: FolderSort) = horizontal().apply {
@@ -939,11 +951,11 @@ class InkActivity : Activity() {
         }
     }
 
-    private fun footer() = column().apply {
+    private fun footer(pages: List<Page>) = column().apply {
         setPadding(dp(PAGE_INSET_DP), 0, dp(PAGE_INSET_DP), dp(4))
         rule(INK)
         val tabs = horizontal()
-        visiblePages.forEach { item ->
+        pages.forEach { item ->
             val selected = page == item
             val destination = if (item == Page.FOLDER) boundFolder?.name ?: item.title else item.title
             val cell = column().apply {
