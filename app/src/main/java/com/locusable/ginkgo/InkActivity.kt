@@ -10,13 +10,14 @@ import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Point
 import android.graphics.Color
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Typeface
-import android.graphics.drawable.StateListDrawable
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.net.Uri
 import android.text.InputFilter
 import android.text.InputType
@@ -41,6 +42,7 @@ import android.widget.TextView
 import android.widget.Toast
 import java.io.File
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 
 class InkActivity : Activity() {
     private enum class Page(val title: String) {
@@ -49,13 +51,18 @@ class InkActivity : Activity() {
 
     private companion object {
         const val READ_LOCAL_BOOKS = 111
+        const val WRITE_WALLPAPER = 112
         const val HOME_COLUMNS = 4
+        const val APP_COLUMNS = 4
+        const val APP_TILE_HEIGHT = 112
+        const val TILE_ROW_GAP = 12
         const val SHELF_COLUMNS = 4
     }
 
     private val prefs by lazy { InkPreferences(this) }
     private val catalog by lazy { AppCatalog(this) }
     private val folderWorker = Executors.newSingleThreadExecutor()
+    private val wallpaperWorker = Executors.newSingleThreadExecutor()
     private val covers by lazy { ShelfCovers(applicationContext) }
     private val grayscale = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f) })
     private val developer get() = getString(R.string.app_developer)
@@ -87,11 +94,16 @@ class InkActivity : Activity() {
     private var observedSnapshot: WeReadSnapshot? = null
     private var observedWeReadLoading = true
     private var loginDialog: Dialog? = null
+    private var wallpaperDialog: Dialog? = null
+    private var wallpaperJob: Future<*>? = null
+    private var wallpaperAwaitingCache = false
+    private var resumeWallpaperExport = false
     private var resumed = false
     private var observingWeRead = false
-    private var recentLocalBooks = emptyList<FolderItem>()
+    private var recentLocalBooks: List<FolderItem>? = null
     private var recentLocalRequest = 0
     private var renderedRecentBooks = emptyList<ShelfEntry>()
+    private var renderedOnlineCovers = emptyList<WeReadCovers.Target>()
     private val weReadChanged: () -> Unit = {
         val current = weRead.snapshot
         val previous = observedSnapshot
@@ -103,7 +115,14 @@ class InkActivity : Activity() {
             weReadGroup = null
             shelfPage = 0
         }
-        if (previous?.shelf != current.shelf || previous?.session != current.session || (page == Page.SHELF && loaded)) {
+        if (page == Page.HOME) {
+            if (previous?.account != current.account || renderedRecentBooks != homeBooks() ||
+                (loaded && renderedRecentBooks.isEmpty() && recentLocalBooks != null)) {
+                render(scrollY = body?.scrollY ?: 0)
+            } else if (previous?.session?.cookies != current.session?.cookies) {
+                bindOnlineCovers()
+            }
+        } else if (previous?.shelf != current.shelf || previous?.session != current.session || (loaded && page == Page.SHELF)) {
             render(scrollY = body?.scrollY ?: 0)
         }
         loginDialog?.let(::updateWeReadLoginDialog)
@@ -125,15 +144,24 @@ class InkActivity : Activity() {
     override fun onResume() {
         super.onResume()
         resumed = true
+        val previousBody = body
         refresh()
         observeWeRead()
+        // onPause cancels outstanding loads; resume them even if refresh kept the same views.
+        if (body === previousBody) bindOnlineCovers()
         if (page == Page.HOME) loadRecentLocalBooks()
         refreshShelf()
+        if (resumeWallpaperExport) {
+            resumeWallpaperExport = false
+            requestWallpaperExport()
+        }
     }
 
     override fun onDestroy() {
         pinDialog?.dismiss()
         loginDialog?.dismiss()
+        cancelWallpaperExport()
+        wallpaperWorker.shutdownNow()
         folderRequest++
         recentLocalRequest++
         folderWorker.shutdownNow()
@@ -146,6 +174,7 @@ class InkActivity : Activity() {
         pendingBook = null
         resumed = false
         loginDialog?.dismiss()
+        cancelWallpaperExport()
         observeWeRead()
         if (weReadCovers.isInitialized()) weReadCovers.value.hide(weReadCoverOwner)
         super.onPause()
@@ -157,6 +186,7 @@ class InkActivity : Activity() {
         if (intent.hasCategory(Intent.CATEGORY_HOME)) {
             pinDialog?.dismiss()
             loginDialog?.dismiss()
+            cancelWallpaperExport()
             show(Page.HOME)
         }
     }
@@ -238,7 +268,7 @@ class InkActivity : Activity() {
         val opened = if (withBooks) prefs.folderOpenTimes() else emptyMap()
         val onlineOpened = if (withBooks) prefs.weReadOpenTimes(weRead.snapshot.account) else emptyMap()
         panel.addView(scroll, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
-        val content = column().apply { setPadding(0, dp(18), 0, dp(12)) }
+        val content = column().apply { setPadding(0, dp(PAGE_TOP_DP), 0, dp(PAGE_BOTTOM_DP)) }
         scroll.addView(content, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         val coverTargets = mutableListOf<ShelfCovers.Target>()
         val onlineCoverTargets = mutableListOf<WeReadCovers.Target>()
@@ -247,7 +277,6 @@ class InkActivity : Activity() {
             Page.APPS -> fillApps(content, scroll)
             Page.SHELF -> {
                 shelfOrderDirty = false
-                panel.rule()
                 val pager = FrameLayout(this)
                 panel.addView(pager, LinearLayout.LayoutParams(MATCH_PARENT, dp(ACTION_HEIGHT_DP)))
                 fillShelf(content, scroll, pager, coverTargets, onlineCoverTargets, sort, opened, onlineOpened)
@@ -261,12 +290,18 @@ class InkActivity : Activity() {
         covers.show(coverTargets, sort, opened) { location ->
             mosaicRevisions[location.id] ?: 0
         }
-        if (onlineCoverTargets.isNotEmpty() && resumed) {
-            weReadCovers.value.show(weReadCoverOwner, weRead.snapshot.account, weRead.snapshot.session, onlineCoverTargets)
+        renderedOnlineCovers = onlineCoverTargets
+        bindOnlineCovers()
+        if (scrollY > 0) scroll.post { scroll.scrollTo(0, scrollY) }
+    }
+
+    private fun bindOnlineCovers() {
+        if (renderedOnlineCovers.isNotEmpty() && resumed) {
+            val snapshot = weRead.snapshot
+            weReadCovers.value.show(weReadCoverOwner, snapshot.account, snapshot.session, renderedOnlineCovers)
         } else if (weReadCovers.isInitialized()) {
             weReadCovers.value.hide(weReadCoverOwner)
         }
-        if (scrollY > 0) scroll.post { scroll.scrollTo(0, scrollY) }
     }
 
     private fun wordmark(): LinearLayout = horizontal().apply {
@@ -277,7 +312,7 @@ class InkActivity : Activity() {
             maxLines = 1
             fitLineTo(available * 0.4f)
         }
-        val name = label(getString(R.string.app_name), 72f, face = Typeface.create("serif", Typeface.NORMAL)).apply {
+        val name = label(getString(R.string.app_name), 54f, face = Typeface.create("serif", Typeface.NORMAL)).apply {
             includeFontPadding = false
             maxLines = 1
             fitLineTo(available - byline.paint.measureText(byline.text.toString()))
@@ -285,7 +320,7 @@ class InkActivity : Activity() {
         addView(name, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
         addView(byline, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
             marginStart = dp(11)
-            bottomMargin = dp(12)
+            bottomMargin = dp(9)
         })
     }
 
@@ -299,31 +334,32 @@ class InkActivity : Activity() {
         opened: Map<String, Long>, onlineOpened: Map<String, Long>,
     ) = with(content) {
         addView(wordmark(), LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        gap(25)
         val pins = prefs.pinned().mapNotNull { key -> apps.find { it.key == key } }.take(MAX_PINS)
-        val grid = prefs.homeGrid
-        section("常用应用", "${pins.size} / $MAX_PINS")
-        if (pins.isEmpty()) {
-            addView(label("还没有常用应用", 15f, tone = SOFT_INK), LinearLayout.LayoutParams(MATCH_PARENT, dp(48)))
-        } else if (grid) {
-            tileRows(pins, columns = HOME_COLUMNS, rowHeight = 112, tile = ::appTile)
-        } else pins.forEach { item -> addView(appRow(item, pinned = true)) }
-
         val books = homeBooks(opened, onlineOpened)
         renderedRecentBooks = books
+        val grid = prefs.homeGrid
+        if (pins.isNotEmpty()) {
+            gap(PAGE_INSET_DP)
+            section("常用应用", "${pins.size} / $MAX_PINS")
+            if (grid) tileRows(pins, columns = HOME_COLUMNS, rowHeight = appTileHeight()) { appTile(it, pinned = true) }
+            else pins.forEach { item -> addView(appRow(item, pinned = true)) }
+        }
         if (books.isNotEmpty()) {
-            gap(20)
+            gap(if (pins.isEmpty()) PAGE_INSET_DP else SECTION_GAP_DP)
             section("最近打开", "")
             if (grid) tileRows(books, columns = HOME_COLUMNS) {
                 shelfTile(it, localCovers, onlineCovers, FolderSort.NAME, onlineOpened)
             } else books.forEach { addView(shelfListRow(it)) }
+        } else if (pins.isEmpty() && recentLocalBooks != null && weRead.state != WeReadController.State.LOADING) {
+            gap(PAGE_INSET_DP)
+            folderNotice("长按应用可固定到首页，打开过的书也会显示在这里。")
         }
     }
 
     private fun homeBooks(
         local: Map<String, Long> = prefs.folderOpenTimes(),
         online: Map<String, Long> = prefs.weReadOpenTimes(weRead.snapshot.account),
-    ) = recentShelfBooks(recentLocalBooks, weRead.snapshot.shelf?.books.orEmpty(), local, online, MAX_RECENT_BOOKS)
+    ) = recentShelfBooks(recentLocalBooks.orEmpty(), weRead.snapshot.shelf?.books.orEmpty(), local, online, MAX_RECENT_BOOKS)
 
     private fun loadRecentLocalBooks() {
         val request = ++recentLocalRequest
@@ -332,15 +368,19 @@ class InkActivity : Activity() {
             val recent = FolderAccess.recentBooks(opened, MAX_RECENT_BOOKS)
             runOnUiThread {
                 if (request != recentLocalRequest || isDestroyed) return@runOnUiThread
+                val firstLoad = recentLocalBooks == null
                 recentLocalBooks = recent
-                if (page == Page.HOME && renderedRecentBooks != homeBooks(opened)) render()
+                if (page == Page.HOME && (firstLoad || renderedRecentBooks != homeBooks(opened))) render()
             }
         }
     }
 
-    private fun appTile(item: AppEntry) = column().apply {
+    private fun appTileHeight() = APP_TILE_HEIGHT + ((resources.configuration.fontScale - 1f).coerceAtLeast(0f) * 40).toInt()
+
+    private fun appTile(item: AppEntry, pinned: Boolean) = column().apply {
         val name = displayLabel(item)
-        contentDescription = name
+        val showPin = page == Page.APPS && pinned
+        contentDescription = if (showPin) "$name，已固定" else name
         gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
         setPadding(dp(2), dp(10), dp(2), dp(4))
         val iconSize = minOf(60, ((resources.configuration.screenWidthDp - 88) / HOME_COLUMNS).coerceAtLeast(34))
@@ -351,27 +391,38 @@ class InkActivity : Activity() {
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             }
         } ?: InkGlyph(this@InkActivity, InkGlyph.Kind.APP, sizeDp = 35)
-        addView(icon, LinearLayout.LayoutParams(dp(iconSize), dp(iconSize)))
+        if (showPin) {
+            addView(FrameLayout(this@InkActivity).apply {
+                addView(icon, FrameLayout.LayoutParams(dp(iconSize), dp(iconSize), Gravity.CENTER))
+                addView(InkGlyph(this@InkActivity, InkGlyph.Kind.PIN, sizeDp = 12).apply {
+                    background = paperShape(LINE)
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                }, FrameLayout.LayoutParams(dp(18), dp(18), Gravity.TOP or Gravity.END))
+            }, LinearLayout.LayoutParams(dp(iconSize + 16), dp(iconSize)))
+        } else addView(icon, LinearLayout.LayoutParams(dp(iconSize), dp(iconSize)))
         gap(6)
-        addView(label(name, 14f).apply {
+        addView(label(name, LABEL_TEXT_SP).apply {
             gravity = Gravity.CENTER
             maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        appAction(item, pinned = true)
+        appAction(item, pinned)
     }
 
-    private fun <T : Any> LinearLayout.tileRows(items: List<T>, columns: Int, rowHeight: Int? = null, tile: (T) -> View) {
+    private fun <T : Any> LinearLayout.tileRows(
+        items: List<T>, columns: Int, rowHeight: Int? = null, rowGap: Int = TILE_ROW_GAP, tile: (T) -> View,
+    ) {
         val rowSize = rowHeight?.let { dp(it) } ?: WRAP_CONTENT
         val tileHeight = if (rowHeight == null) WRAP_CONTENT else MATCH_PARENT
         items.chunked(columns).forEach { group ->
-            gap(12)
+            if (rowGap > 0) gap(rowGap)
             addView(horizontal().apply {
                 gravity = Gravity.TOP
                 repeat(columns) { index ->
-                    val child = group.getOrNull(index)?.let(tile) ?: View(this@InkActivity)
-                    addView(child, LinearLayout.LayoutParams(0, tileHeight, 1f).apply {
+                    val child = group.getOrNull(index)?.let(tile)
+                    // Empty columns reserve width, never the ScrollView's remaining height.
+                    addView(child ?: View(this@InkActivity), LinearLayout.LayoutParams(0, if (child == null) 0 else tileHeight, 1f).apply {
                         if (index > 0) marginStart = dp(9)
                     })
                 }
@@ -380,29 +431,35 @@ class InkActivity : Activity() {
     }
 
     private fun fillApps(content: LinearLayout, scroll: ScrollView) = with(content) {
-        title("应用")
-        section("应用列表", "${apps.size} 项")
+        collectionHeader(Page.APPS.title)
         if (apps.isEmpty()) {
-            addView(label("没有可启动的应用", 15f, tone = SOFT_INK), LinearLayout.LayoutParams(MATCH_PARENT, dp(64)))
-            rule()
+            folderNotice("没有可启动的应用")
             return@with
         }
+        val grid = prefs.appsGrid
         val rows = addRows()
         val pager = FrameLayout(this@InkActivity).apply { visibility = View.GONE }
         addView(pager, LinearLayout.LayoutParams(MATCH_PARENT, dp(ACTION_HEIGHT_DP)))
-        val hint = label("长按应用可固定到首页或取消固定。", 13f, tone = SOFT_INK).apply {
-            setPadding(0, dp(14), 0, 0)
-        }
-        addView(hint, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         val pinned = prefs.pinned().toSet()
-        showPagedList(content, scroll, rows, pager, apps, appPage, alwaysShowPager = false,
-            trailingHeight = { hint.height }, title = ::displayLabel, hasPin = { it.key in pinned },
-            onPage = { appPage = it }, makeRow = { appRow(it, pinned = it.key in pinned) })
+        if (grid) {
+            val rowHeight = appTileHeight()
+            val rowCount = (apps.size - 1) / APP_COLUMNS + 1
+            showPagedRows(content, scroll, rows, pager, appPage, alwaysShowPager = false,
+                measure = { IntArray(rowCount) { dp(rowHeight) + dp(TILE_ROW_GAP) } },
+                onPage = { appPage = it }) { range ->
+                val visible = apps.subList(range.first * APP_COLUMNS, minOf(apps.size, (range.last + 1) * APP_COLUMNS))
+                rows.tileRows(visible, APP_COLUMNS, rowHeight = rowHeight) { item -> appTile(item, pinned = item.key in pinned) }
+            }
+        } else {
+            showPagedList(content, scroll, rows, pager, apps, appPage, alwaysShowPager = false,
+                title = ::displayLabel, hasPin = { it.key in pinned },
+                onPage = { appPage = it }, makeRow = { appRow(it, pinned = it.key in pinned) })
+        }
     }
 
     private fun paginationRow(index: Int, total: Int, move: (Int) -> Unit) = horizontal().apply {
         addView(pageButton("上一页", InkGlyph.Kind.LEFT, index > 0) { move(-1) })
-        addView(label("${index + 1}/$total", 14f, face = Typeface.MONOSPACE, tone = SOFT_INK).apply {
+        addView(caption("${index + 1}/$total").apply {
             gravity = Gravity.CENTER
             maxLines = 1
             contentDescription = "第 ${index + 1} 页，共 $total 页"
@@ -435,8 +492,6 @@ class InkActivity : Activity() {
             shelfPage = 0
             render()
         }
-        title(group?.name ?: folder?.name ?: Page.SHELF.title, accessory = sorting, leading = back)
-
         val local = folderContents
         val entries = buildList {
             if (group == null) {
@@ -446,9 +501,10 @@ class InkActivity : Activity() {
                 (group?.books ?: cloudShelf?.root).orEmpty().forEach { add(ShelfEntry.Online(it)) }
             }
         }.orderedOnShelf(sort, opened, onlineOpened)
+        collectionHeader(group?.name ?: folder?.name ?: Page.SHELF.title, accessory = sorting, leading = back)
         if (group == null && local == FolderContents.PermissionRequired) {
             addView(this@InkActivity.paperButton("允许读取本地图书", primary = false) { requestBooksPermission() },
-                LinearLayout.LayoutParams(WRAP_CONTENT, dp(ACTION_HEIGHT_DP)))
+                LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
         }
         if (entries.isEmpty()) {
             val message = when {
@@ -464,7 +520,6 @@ class InkActivity : Activity() {
             updatePager(pager, 0, 1) {}
             return@with
         }
-        section(if (folder == null && group == null) "全部" else "目录内容", "${entries.size} 项")
         if (prefs.shelfGrid) {
             val pageSize = SHELF_COLUMNS * 2
             val total = (entries.size - 1) / pageSize + 1
@@ -507,15 +562,25 @@ class InkActivity : Activity() {
     private fun updatePager(pager: FrameLayout, index: Int, total: Int, move: (Int) -> Unit) {
         pager.removeAllViews()
         pager.addView(paginationRow(index, total, move), FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        pager.addView(paperRule(), FrameLayout.LayoutParams(MATCH_PARENT, dp(1), Gravity.TOP))
     }
 
     private fun LinearLayout.addRows() = column().also { addView(it, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)) }
 
     private fun <T> showPagedList(
         content: LinearLayout, scroll: ScrollView, rows: LinearLayout, pager: FrameLayout,
-        entries: List<T>, initialPage: Int, alwaysShowPager: Boolean, trailingHeight: () -> Int = { 0 },
+        entries: List<T>, initialPage: Int, alwaysShowPager: Boolean,
         title: (T) -> String, hasPin: (T) -> Boolean = { false }, singleLine: Boolean = false,
         onPage: (Int) -> Unit, makeRow: (T) -> View,
+    ) = showPagedRows(content, scroll, rows, pager, initialPage, alwaysShowPager,
+        measure = { width -> measureRows(entries, width, title, hasPin, singleLine) }, onPage = onPage) { range ->
+        for (index in range) rows.addView(makeRow(entries[index]))
+    }
+
+    private fun showPagedRows(
+        content: LinearLayout, scroll: ScrollView, rows: LinearLayout, pager: FrameLayout,
+        initialPage: Int, alwaysShowPager: Boolean,
+        measure: (Int) -> IntArray, onPage: (Int) -> Unit, drawPage: (IntRange) -> Unit,
     ) {
         var pages = emptyList<IntRange>()
         var currentPage = initialPage
@@ -524,7 +589,7 @@ class InkActivity : Activity() {
             currentPage = index.coerceIn(pages.indices)
             onPage(currentPage)
             rows.removeAllViews()
-            for (i in pages[currentPage]) rows.addView(makeRow(entries[i]))
+            drawPage(pages[currentPage])
             if (alwaysShowPager || pages.size > 1) {
                 pager.visibility = View.VISIBLE
                 updatePager(pager, currentPage, pages.size) { step ->
@@ -542,12 +607,12 @@ class InkActivity : Activity() {
         var lastHeight = -1
         val layoutPages = ViewTreeObserver.OnPreDrawListener {
             val width = rows.width
-            val height = (scroll.height - rows.top - content.paddingBottom - trailingHeight()).coerceAtLeast(0)
+            val height = (scroll.height - rows.top - content.paddingBottom).coerceAtLeast(0)
             if (width == 0 || (width == lastWidth && height == lastHeight)) return@OnPreDrawListener true
             lastWidth = width
             lastHeight = height
             val first = pages.getOrNull(currentPage)?.first
-            val heights = measureRows(entries, width, title, hasPin, singleLine)
+            val heights = measure(width)
             // The Apps pager is inline and only needs space if the list spills over one page.
             val available = if (!alwaysShowPager && heights.sumOf { it.toLong() } > height) {
                 (height - dp(ACTION_HEIGHT_DP)).coerceAtLeast(0)
@@ -657,11 +722,11 @@ class InkActivity : Activity() {
         val next = FolderSort.entries[(sort.ordinal + 1) % FolderSort.entries.size]
         gravity = Gravity.END or Gravity.CENTER_VERTICAL
         minimumHeight = dp(ACTION_HEIGHT_DP)
-        minimumWidth = dp(132)
-        setPadding(dp(6), 0, dp(4), 0)
+        minimumWidth = dp(112)
+        setPaddingRelative(dp(6), 0, dp(4), 0)
         contentDescription = "排序方式：$current，点按切换为${next.label}"
         addView(InkGlyph(this@InkActivity, InkGlyph.Kind.SORT, sizeDp = 21), LinearLayout.LayoutParams(dp(24), dp(24)))
-        addView(label(current, 14f).apply {
+        addView(label(current, LABEL_TEXT_SP).apply {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -742,7 +807,7 @@ class InkActivity : Activity() {
                 addView(InkGlyph(this@InkActivity, InkGlyph.Kind.FILE, sizeDp = 16, tone = SOFT_INK),
                     LinearLayout.LayoutParams(dp(17), dp(20)).apply { marginEnd = dp(4) })
             }
-            addView(label(name, 14f, face = if (directory) Typeface.DEFAULT_BOLD else Typeface.DEFAULT).apply {
+            addView(label(name, LABEL_TEXT_SP, face = if (directory) Typeface.DEFAULT_BOLD else Typeface.DEFAULT).apply {
                 maxLines = 2
                 ellipsize = TextUtils.TruncateAt.END
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -814,8 +879,8 @@ class InkActivity : Activity() {
     }
 
     private fun LinearLayout.folderNotice(message: String) {
-        addView(label(message, 15f, tone = SOFT_INK).apply {
-            setPadding(0, dp(14), 0, dp(14))
+        addView(label(message, ACTION_TEXT_SP, tone = SOFT_INK).apply {
+            setPadding(0, dp(HEADING_GAP_DP), 0, dp(HEADING_GAP_DP))
         }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
     }
 
@@ -865,9 +930,13 @@ class InkActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode != READ_LOCAL_BOOKS) return
-        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) reloadFolder()
-        else toast("可在应用权限中允许 Ginkgo 读取存储")
+        val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+        when (requestCode) {
+            READ_LOCAL_BOOKS -> if (granted) reloadFolder() else toast("可在应用权限中允许 Ginkgo 读取存储")
+            WRITE_WALLPAPER -> if (granted) {
+                if (resumed) requestWallpaperExport() else resumeWallpaperExport = true
+            } else toast("允许存储权限后才能导出壁纸")
+        }
     }
 
     private fun fillAbout(content: LinearLayout) = with(content) {
@@ -894,7 +963,7 @@ class InkActivity : Activity() {
             includeFontPadding = false
         }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         gap(14)
-        addView(label(getString(R.string.about_description), 15f, tone = SOFT_INK).apply {
+        addView(label(getString(R.string.about_description), ACTION_TEXT_SP, tone = SOFT_INK).apply {
             gravity = Gravity.CENTER
         }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         whitespace(34, 1.25f)
@@ -909,7 +978,7 @@ class InkActivity : Activity() {
         addView(horizontal().apply {
             setBaselineAligned(true)
             addView(imprintLabel(R.string.about_version))
-            addView(label(installedVersion, 12f, face = Typeface.MONOSPACE, tone = SOFT_INK),
+            addView(label(installedVersion, CAPTION_TEXT_SP, face = Typeface.MONOSPACE, tone = SOFT_INK),
                 LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(8) })
         }, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
         whitespace(26, 1f)
@@ -919,31 +988,116 @@ class InkActivity : Activity() {
         title("设置")
         section("显示页面", "")
         gap(4)
-        addView(visibilityOption("首页", checked = true, enabled = false), LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        addView(visibilityOption("应用", prefs.showAppsTab) { checked ->
-            prefs.showAppsTab = checked
-            render(scrollY = body?.scrollY ?: 0)
-        }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        addView(visibilityOption(Page.SHELF.title, prefs.showShelfTab) { checked ->
-            prefs.showShelfTab = checked
-            render(scrollY = body?.scrollY ?: 0)
-        }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        addView(visibilityOption("关于", prefs.showAboutTab) { checked ->
-            prefs.showAboutTab = checked
-            render(scrollY = body?.scrollY ?: 0)
-        }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        addView(visibilityOption("设置", checked = true, enabled = false), LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        gap(20)
+        val config = resources.configuration
+        val contentWidth = config.screenWidthDp - 2 * PAGE_INSET_DP
+        val columns = if (contentWidth >= 3 * 96 * config.fontScale.coerceAtLeast(1f)) 3 else 2
+        val options = listOf(
+            visibilityOption(Page.HOME.title, checked = true, enabled = false),
+            visibilityOption(Page.APPS.title, prefs.showAppsTab) { checked ->
+                prefs.showAppsTab = checked
+                render(scrollY = body?.scrollY ?: 0)
+            },
+            visibilityOption(Page.SHELF.title, prefs.showShelfTab) { checked ->
+                prefs.showShelfTab = checked
+                render(scrollY = body?.scrollY ?: 0)
+            },
+            visibilityOption(Page.ABOUT.title, prefs.showAboutTab) { checked ->
+                prefs.showAboutTab = checked
+                render(scrollY = body?.scrollY ?: 0)
+            },
+            visibilityOption(Page.SETTINGS.title, checked = true, enabled = false),
+        )
+        tileRows(options, columns, rowGap = 0) { it }
+        gap(SECTION_GAP_DP)
         section("展示方式", "")
         gap(4)
-        layoutChoice("首页", "图标", prefs.homeGrid) { prefs.homeGrid = it }
+        layoutChoice(Page.HOME.title, "图标", prefs.homeGrid) { prefs.homeGrid = it }
+        layoutChoice(Page.APPS.title, "图标", prefs.appsGrid) {
+            prefs.appsGrid = it
+            appPage = 0
+        }
         layoutChoice(Page.SHELF.title, "封面", prefs.shelfGrid) {
             prefs.shelfGrid = it
             shelfPage = 0
         }
-        gap(20)
+        gap(SECTION_GAP_DP)
         section("账号", "")
         folderRow("微信读书", InkGlyph.Kind.BOOK, InkGlyph.Kind.RIGHT, ::manageWeReadAccount)
+        gap(SECTION_GAP_DP)
+        section("工具", "")
+        folderRow("导出书架壁纸", InkGlyph.Kind.WALLPAPER, InkGlyph.Kind.ARROW, ::requestWallpaperExport)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun requestWallpaperExport() {
+        if (!resumed || isDestroyed || page != Page.SETTINGS || wallpaperDialog != null || wallpaperAwaitingCache) return
+        if (Build.VERSION.SDK_INT < 29 && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), WRITE_WALLPAPER)
+            return
+        }
+        wallpaperAwaitingCache = true
+        weRead.whenLoaded {
+            wallpaperAwaitingCache = false
+            if (resumed && !isDestroyed && page == Page.SETTINGS && wallpaperDialog == null) exportShelfWallpaper()
+        }
+    }
+
+    @Suppress("DEPRECATION") // Use the full display, not the current app viewport.
+    private fun exportShelfWallpaper() {
+        val size = Point().also { windowManager.defaultDisplay.getRealSize(it) }
+        val snapshot = weRead.snapshot
+        val localOpened = if (Build.VERSION.SDK_INT < 29 && hasBooksPermission()) prefs.folderOpenTimes() else emptyMap()
+        val onlineOpened = prefs.weReadOpenTimes(snapshot.account)
+        val context = applicationContext
+        val localCover = covers
+        val onlineCover = weReadCovers.value.wallpaperSource(snapshot.account, snapshot.session)
+        val dialog = paperDialog()
+        dialog.setContentView(paperDialogPanel().apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            addView(label("正在生成壁纸…", DIALOG_TITLE_SP, face = Typeface.DEFAULT_BOLD).apply { gravity = Gravity.CENTER })
+            gap(SECTION_GAP_DP)
+            addView(this@InkActivity.paperButton("取消", primary = false, click = ::cancelWallpaperExport),
+                LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
+        })
+        wallpaperDialog = dialog
+        dialog.setOnDismissListener { if (wallpaperDialog === dialog) cancelWallpaperExport() }
+        presentPaperDialog(dialog)
+        wallpaperJob = wallpaperWorker.submit {
+            val result = runCatching {
+                val layout = ShelfWallpaper.layout(size.x, size.y)
+                val recent = recentShelfBooks(FolderAccess.recentBooks(localOpened, Int.MAX_VALUE).filter { it.coverFormat != null },
+                    snapshot.shelf?.books.orEmpty(), localOpened, onlineOpened, Int.MAX_VALUE)
+                val deadline = SystemClock.elapsedRealtime() + 15_000
+                val image = ShelfWallpaper.composeRecent(layout, recent) { entry ->
+                    when (entry) {
+                        is ShelfEntry.Local -> localCover.wallpaperCover(entry.item, layout.coverEdge)
+                        is ShelfEntry.Online -> (entry.entry as? WeReadEntry.Book)?.let { onlineCover(it, deadline) }
+                    }
+                } ?: return@runCatching null
+                try { ShelfWallpaper.save(context, image) } finally { image.recycle() }
+            }
+            runOnUiThread {
+                if (wallpaperDialog !== dialog || isDestroyed) return@runOnUiThread
+                wallpaperDialog = null
+                wallpaperJob = null
+                dialog.dismiss()
+                result.fold(
+                    onSuccess = { path ->
+                        if (path == null) showPaperDialog("没有可用封面", "最近打开的书里没有可用封面。", "知道了")
+                        else showPaperDialog("壁纸已导出", "已保存到 $path", "知道了")
+                    },
+                    onFailure = { showPaperDialog("未能导出壁纸", "请检查存储空间后再试。", "知道了") },
+                )
+            }
+        }
+    }
+
+    private fun cancelWallpaperExport() {
+        val dialog = wallpaperDialog
+        wallpaperDialog = null
+        wallpaperJob?.cancel(true)
+        wallpaperJob = null
+        dialog?.dismiss()
     }
 
     private fun manageWeReadAccount() {
@@ -983,17 +1137,15 @@ class InkActivity : Activity() {
             dialog.dismiss()
             return
         }
-        val panel = column().apply {
-            setPadding(dp(PAGE_INSET_DP), dp(20), dp(PAGE_INSET_DP), dp(20))
-            background = paperShape(INK)
+        val panel = paperDialogPanel().apply {
             gravity = Gravity.CENTER_HORIZONTAL
             val state = weRead.state
             addView(label(if (state == WeReadController.State.VERIFY) "验证微信读书登录" else "微信读书扫码登录",
-                20f, face = Typeface.DEFAULT_BOLD).apply { gravity = Gravity.CENTER },
+                DIALOG_TITLE_SP, face = Typeface.DEFAULT_BOLD).apply { gravity = Gravity.CENTER },
                 LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
             gap(12)
             fun message(text: String) {
-                addView(label(text, 14f, tone = SOFT_INK).apply { gravity = Gravity.CENTER },
+                addView(label(text, ACTION_TEXT_SP, tone = SOFT_INK).apply { gravity = Gravity.CENTER },
                     LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
             }
             var submit: (() -> Unit)? = null
@@ -1035,12 +1187,16 @@ class InkActivity : Activity() {
             }
             gap(12)
             addView(horizontal().apply {
-                addView(this@InkActivity.paperButton("取消", primary = false) { dialog.dismiss() })
-                submit?.let { confirm ->
-                    addView(this@InkActivity.paperButton(button, primary = false, click = confirm),
-                        LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(10) })
+                gravity = Gravity.CENTER
+                val confirm = submit
+                addView(this@InkActivity.paperButton("取消", primary = false) { dialog.dismiss() },
+                    LinearLayout.LayoutParams(if (confirm == null) WRAP_CONTENT else 0, WRAP_CONTENT,
+                        if (confirm == null) 0f else 1f))
+                if (confirm != null) {
+                    addView(this@InkActivity.paperButton(button, primary = true, click = confirm),
+                        LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(10) })
                 }
-            })
+            }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
             // An expired session can be renewed by scanning or cleared explicitly without adding a settings row.
             if (weRead.snapshot.account != null && state != WeReadController.State.SAVING) {
                 gap(6)
@@ -1054,11 +1210,7 @@ class InkActivity : Activity() {
                 })
             }
         }
-        dialog.setContentView(ScrollView(this).apply {
-            isVerticalScrollBarEnabled = false
-            overScrollMode = View.OVER_SCROLL_NEVER
-            addView(panel)
-        })
+        dialog.setContentView(paperDialogContent(panel))
     }
 
     private fun wechatQr(modules: Array<BooleanArray>): View = object : View(this) {
@@ -1079,49 +1231,49 @@ class InkActivity : Activity() {
 
     private fun LinearLayout.layoutChoice(name: String, alternative: String, useAlternative: Boolean, change: (Boolean) -> Unit) {
         addView(horizontal().apply {
-            setPadding(0, dp(6), 0, dp(6))
-            addView(label(name, 16f), LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginEnd = dp(8) })
-            val edge = dp(1)
+            setPadding(0, dp(3), 0, dp(3))
+            addView(label(name, ROW_TEXT_SP).apply { setPadding(0, 0, 0, dp(6)) },
+                LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginEnd = dp(8) })
             val group = RadioGroup(this@InkActivity).apply {
                 orientation = RadioGroup.HORIZONTAL
                 setBaselineAligned(false)
-                setBackgroundColor(LINE)
-                setPadding(edge, edge, edge, edge)
             }
             val list = layoutButton(name, "列表")
             val other = layoutButton(name, alternative)
-            group.addView(list, RadioGroup.LayoutParams(0, MATCH_PARENT, 1f).apply { marginEnd = edge })
-            group.addView(other, RadioGroup.LayoutParams(0, MATCH_PARENT, 1f))
+            group.addView(list, RadioGroup.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginEnd = dp(6) })
+            group.addView(other, RadioGroup.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
             group.check(if (useAlternative) other.id else list.id)
             group.setOnCheckedChangeListener { _, id -> if (id == list.id || id == other.id) change(id == other.id) }
-            addView(group, LinearLayout.LayoutParams(0, dp(ACTION_HEIGHT_DP) + 2 * edge, 1.4f))
+            addView(group, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
         }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
     }
 
-    private fun layoutButton(pageName: String, value: String) = RadioButton(this).apply {
-        val checked = intArrayOf(android.R.attr.state_checked)
-        val focused = intArrayOf(android.R.attr.state_focused)
-        val pressed = intArrayOf(android.R.attr.state_pressed)
+    private fun layoutButton(pageName: String, value: String) = object : RadioButton(this) {
+        private val mark = Paint().apply { color = INK }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            if (isChecked) {
+                val left = (width - dp(20)) / 2f
+                val bottom = (height - dp(7)).toFloat()
+                canvas.drawRect(left, bottom - dp(2), left + dp(20), bottom, mark)
+            }
+        }
+    }.apply {
         id = View.generateViewId()
         text = value
         contentDescription = "$pageName，$value"
-        textSize = 14f
+        textSize = ACTION_TEXT_SP
         isAllCaps = false
         gravity = Gravity.CENTER
         maxLines = 1
         ellipsize = TextUtils.TruncateAt.END
         buttonDrawable = null
-        minWidth = 0
-        setPadding(dp(3), 0, dp(3), 0)
-        setTextColor(ColorStateList(arrayOf(checked, intArrayOf()), intArrayOf(Color.WHITE, INK)))
-        background = StateListDrawable().apply {
-            addState(checked + pressed, paperShape(Color.TRANSPARENT, SOFT_INK))
-            addState(checked + focused, paperShape(Color.TRANSPARENT, SOFT_INK))
-            addState(checked, paperShape(Color.TRANSPARENT, INK))
-            addState(pressed, paperShape(Color.TRANSPARENT, PRESS_FILL))
-            addState(focused, paperShape(INK))
-            addState(intArrayOf(), paperShape(Color.TRANSPARENT))
-        }
+        minWidth = dp(56)
+        minHeight = dp(ACTION_HEIGHT_DP)
+        setPadding(dp(8), dp(3), dp(8), dp(9))
+        setTextColor(ColorStateList(arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()), intArrayOf(INK, SOFT_INK)))
+        background = pressBackground()
     }
 
     private fun visibilityOption(name: String, checked: Boolean, enabled: Boolean = true, onToggle: ((Boolean) -> Unit)? = null) = horizontal().apply {
@@ -1148,13 +1300,14 @@ class InkActivity : Activity() {
 
     private fun LinearLayout.addVisibilityCheck(check: CheckBox) = addView(check, LinearLayout.LayoutParams(dp(ACTION_HEIGHT_DP), WRAP_CONTENT))
 
-    private fun visibilityTitle(name: String) = label(name, 17f).apply {
+    private fun visibilityTitle(name: String) = label(name, ROW_TEXT_SP).apply {
         maxLines = 2
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
 
     private fun LinearLayout.title(text: String, accessory: View? = null, leading: View? = null) {
         val heading = label(text, PAGE_TITLE_SP, face = Typeface.DEFAULT_BOLD).apply {
+            minimumHeight = dp(ACTION_HEIGHT_DP)
             if (leading == null) maxLines = 2 else setSingleLine(true)
             ellipsize = TextUtils.TruncateAt.END
         }
@@ -1167,15 +1320,20 @@ class InkActivity : Activity() {
                 accessory?.let { addView(it, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(8) }) }
             }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         }
-        gap(14)
+        gap(HEADING_GAP_DP)
+    }
+
+    private fun LinearLayout.collectionHeader(name: String, accessory: View? = null, leading: View? = null) {
+        title(name, accessory, leading)
+        rule()
     }
 
     private fun LinearLayout.section(left: String, right: String) {
         addView(horizontal().apply {
-            addView(label(left, 14f, face = Typeface.DEFAULT_BOLD), LinearLayout.LayoutParams(0, MATCH_PARENT, 1f))
+            addView(label(left, LABEL_TEXT_SP, face = Typeface.DEFAULT_BOLD), LinearLayout.LayoutParams(0, MATCH_PARENT, 1f))
             if (right.isNotEmpty()) addView(caption(right), LinearLayout.LayoutParams(WRAP_CONTENT, MATCH_PARENT))
         }, LinearLayout.LayoutParams(MATCH_PARENT, dp(33)))
-        rule(INK)
+        rule()
     }
 
     private fun appIcon(item: AppEntry, large: Boolean = false): View {
@@ -1245,7 +1403,7 @@ class InkActivity : Activity() {
     private inner class PaperRow(
         title: String, icon: View, trailing: InkGlyph.Kind?, showPin: Boolean = false, singleLine: Boolean = false,
     ) : LinearLayout(this@InkActivity) {
-        val titleView = label(title, 18f).apply {
+        val titleView = label(title, ROW_TEXT_SP).apply {
             if (singleLine) setSingleLine(true) else maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -1262,7 +1420,7 @@ class InkActivity : Activity() {
             addView(icon, LayoutParams(dp(29), dp(30)))
             addView(titleView, LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(11) })
             if (showPin) addView(InkGlyph(this@InkActivity, InkGlyph.Kind.PIN), LayoutParams(dp(22), dp(24)))
-            if (trailing != null) addView(InkGlyph(this@InkActivity, trailing), LayoutParams(dp(29), dp(30)))
+            if (trailing != null) addView(InkGlyph(this@InkActivity, trailing, tone = SOFT_INK), LayoutParams(dp(29), dp(30)))
         }
     }
 
@@ -1274,7 +1432,7 @@ class InkActivity : Activity() {
         minimumWidth = dp(88)
         setPadding(dp(3), 0, dp(3), 0)
         contentDescription = text
-        val title = label(text, 15f, tone = tone).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+        val title = label(text, LABEL_TEXT_SP, tone = tone).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
         val icon = InkGlyph(this@InkActivity, glyph, sizeDp = 20, tone = tone)
         if (leading) addView(icon, LinearLayout.LayoutParams(dp(23), dp(24)))
         addView(title, LinearLayout.LayoutParams(WRAP_CONTENT, MATCH_PARENT))
@@ -1307,7 +1465,7 @@ class InkActivity : Activity() {
                 addView(View(this@InkActivity).apply {
                     setBackgroundColor(if (selected) INK else Color.WHITE)
                 }, LinearLayout.LayoutParams(MATCH_PARENT, dp(2)))
-                addView(label(destination, 14f, face = if (selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT).apply {
+                addView(label(destination, LABEL_TEXT_SP, face = if (selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT).apply {
                     gravity = Gravity.CENTER
                     maxLines = 1
                     ellipsize = TextUtils.TruncateAt.END
@@ -1353,7 +1511,7 @@ class InkActivity : Activity() {
         gravity = Gravity.CENTER_VERTICAL or Gravity.START
     }
 
-    private fun caption(value: String) = label(value, 11f, face = Typeface.MONOSPACE, tone = SOFT_INK).apply {
+    private fun caption(value: String) = label(value, CAPTION_TEXT_SP, face = Typeface.MONOSPACE, tone = SOFT_INK).apply {
         letterSpacing = 0.045f
         maxLines = 1
     }

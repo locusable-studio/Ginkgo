@@ -8,11 +8,12 @@ import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
 
-/** Best-effort private thumbnail cache, accessed only by the shelf worker. */
+/** Best-effort private thumbnail cache, shared by shelf and wallpaper workers. */
 internal class CoverDiskCache(context: Context, name: String = "shelf-covers-v1") {
     private val directory = File(context.cacheDir, name)
     private var bytes: Long? = null
 
+    @Synchronized
     fun read(key: String): Bitmap? = try {
         val file = coverFile(key)
         if (file.isFile) {
@@ -25,6 +26,7 @@ internal class CoverDiskCache(context: Context, name: String = "shelf-covers-v1"
         null
     }
 
+    @Synchronized
     fun write(key: String, bitmap: Bitmap) {
         var pending: File? = null
         try {
@@ -50,6 +52,7 @@ internal class CoverDiskCache(context: Context, name: String = "shelf-covers-v1"
         }
     }
 
+    @Synchronized
     fun clear() {
         try {
             directory.deleteRecursively()

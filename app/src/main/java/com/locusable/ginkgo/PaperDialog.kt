@@ -2,15 +2,18 @@ package com.locusable.ginkgo
 
 import android.app.Activity
 import android.app.Dialog
+import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.view.Window
 import android.view.WindowManager
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 
 internal fun Activity.showPaperDialog(
@@ -20,20 +23,16 @@ internal fun Activity.showPaperDialog(
     onConfirm: (() -> Unit)? = null,
 ): Dialog {
     val dialog = paperDialog()
-    val panel = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(dp(PAGE_INSET_DP), dp(20), dp(PAGE_INSET_DP), dp(20))
-        background = paperShape(INK)
-    }
+    val panel = paperDialogPanel()
     panel.addView(TextView(this).apply {
         text = title
-        textSize = 23f
+        textSize = DIALOG_TITLE_SP
         typeface = Typeface.DEFAULT_BOLD
         setTextColor(INK)
     }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
     panel.addView(TextView(this).apply {
         text = message
-        textSize = 15f
+        textSize = ACTION_TEXT_SP
         setTextColor(SOFT_INK)
         setLineSpacing(dp(3).toFloat(), 1f)
     }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(6) })
@@ -53,9 +52,21 @@ internal fun Activity.showPaperDialog(
     }, if (onConfirm == null) LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT)
        else LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
     panel.addView(buttons, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(20) })
-    dialog.setContentView(panel)
+    dialog.setContentView(paperDialogContent(panel))
     presentPaperDialog(dialog)
     return dialog
+}
+
+internal fun Context.paperDialogPanel() = LinearLayout(this).apply {
+    orientation = LinearLayout.VERTICAL
+    setPadding(dp(PAGE_INSET_DP), dp(SECTION_GAP_DP), dp(PAGE_INSET_DP), dp(SECTION_GAP_DP))
+    background = paperShape(INK)
+}
+
+internal fun Context.paperDialogContent(panel: LinearLayout) = ScrollView(this).apply {
+    isVerticalScrollBarEnabled = false
+    overScrollMode = View.OVER_SCROLL_NEVER
+    addView(panel)
 }
 
 internal fun Activity.paperDialog(secure: Boolean = false): Dialog = Dialog(this).apply {

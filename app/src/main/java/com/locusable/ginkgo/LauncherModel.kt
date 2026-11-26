@@ -129,6 +129,10 @@ internal class InkPreferences(context: Context) {
         get() = prefs.getBoolean("home_grid", false)
         set(value) { prefs.edit().putBoolean("home_grid", value).apply() }
 
+    var appsGrid: Boolean
+        get() = prefs.getBoolean("apps_grid", false)
+        set(value) { prefs.edit().putBoolean("apps_grid", value).apply() }
+
     var shelfGrid: Boolean
         get() = prefs.getBoolean("shelf_grid", prefs.getBoolean("folder_shelf", prefs.getBoolean("weread_shelf", false)))
         set(value) { prefs.edit().putBoolean("shelf_grid", value).apply() }

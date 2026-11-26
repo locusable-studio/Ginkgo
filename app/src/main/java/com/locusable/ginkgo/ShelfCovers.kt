@@ -101,6 +101,13 @@ internal class ShelfCovers(private val context: Context) {
         }
     }
 
+    fun wallpaperCover(item: FolderItem, edge: Int): Bitmap? {
+        val key = item.coverKey(edge.coerceIn(THUMBNAIL_EDGE, 640)) ?: return null
+        val regular = key.copy(edge = THUMBNAIL_EDGE)
+        // Don't displace normal thumbnails with larger transient wallpaper artwork.
+        return if (key == regular) load(regular) else thumbnail(key) ?: load(regular)
+    }
+
     private fun FolderItem.coverKey(edge: Int): Key? = coverFormat?.let { Key(location, lastModified, size, it, edge) }
 
     private fun load(key: Key): Bitmap? {

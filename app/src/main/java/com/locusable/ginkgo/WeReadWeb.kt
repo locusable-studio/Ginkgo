@@ -73,9 +73,9 @@ internal object WeReadWeb {
     }
 
     /** Metadata only, for uploaded books whose shelf row did not carry a usable cover. */
-    fun uploadedBookCover(session: Session, bookId: String): String? {
+    fun uploadedBookCover(session: Session, bookId: String, timeout: Int = 5_000): String? {
         if (!bookId.isWeReadUploadId()) return null
-        val json = jsonRequest("/web/book/info?bookId=${Uri.encode(bookId)}", session.cookies.toMutableMap(), timeout = 5_000)
+        val json = jsonRequest("/web/book/info?bookId=${Uri.encode(bookId)}", session.cookies.toMutableMap(), timeout = timeout)
         if (json.errorCode() != 0) return null
         return json.value("cover", WEREAD_COVER_URL_LIMIT) ?: json.optJSONObject("bookInfo")?.value("cover", WEREAD_COVER_URL_LIMIT)
     }
