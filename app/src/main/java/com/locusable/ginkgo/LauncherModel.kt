@@ -169,6 +169,26 @@ internal class InkPreferences(context: Context) {
 
     fun clearWeReadOpenTimes() = weReadOpens.edit().clear().apply()
 
+    fun hiddenBooks(account: String?) = HiddenBooks(
+        prefs.getStringSet("home_hidden_local", null).orEmpty(),
+        account?.let { prefs.getStringSet(onlineHiddenKey(it), null) }.orEmpty(),
+    )
+
+    fun setBookHidden(entry: ShelfEntry, account: String?, hidden: Boolean) {
+        if (entry.directory) return
+        val key = when (entry) {
+            is ShelfEntry.Local -> "home_hidden_local"
+            is ShelfEntry.Online -> onlineHiddenKey(account ?: return)
+        }
+        val before = prefs.getStringSet(key, null).orEmpty()
+        val after = if (hidden) before + entry.id else before - entry.id
+        prefs.edit().apply {
+            if (after.isEmpty()) remove(key) else putStringSet(key, after)
+        }.apply()
+    }
+
+    private fun onlineHiddenKey(account: String) = "home_hidden_weread:$account"
+
     fun pinned() = prefs.getString("pins", "").orEmpty().lineSequence().filter { it.isNotEmpty() }.toList()
 
     fun seedPins(apps: List<AppEntry>) {

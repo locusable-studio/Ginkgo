@@ -13,7 +13,7 @@ internal class InkGlyph(
     private val sizeDp: Int = 22,
     tone: Int = INK,
 ) : View(context) {
-    enum class Kind { APP, HOME, FILE, DOCUMENT, BOOK, WALLPAPER, SETTINGS, SORT, REFRESH, PIN, ARROW, LEFT, RIGHT }
+    enum class Kind { APP, HOME, FILE, DOCUMENT, BOOK, WALLPAPER, SETTINGS, SORT, REFRESH, PIN, EYE_OFF, ARROW, LEFT, RIGHT }
 
     private val pen = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = tone
@@ -91,6 +91,19 @@ internal class InkGlyph(
             Kind.PIN -> {
                 stroke(canvas, 8, 5, 16, 5, 15, 10, 18, 14, 6, 14, 9, 10, 8, 5)
                 canvas.drawLine(12f, 14f, 12f, 20f, pen)
+            }
+            Kind.EYE_OFF -> {
+                path.rewind()
+                path.moveTo(7.4f, 7.4f)
+                path.cubicTo(4.6f, 9.2f, 3f, 12f, 3f, 12f)
+                path.cubicTo(3f, 12f, 6.5f, 18f, 12f, 18f)
+                path.cubicTo(13.8f, 18f, 15.3f, 17.4f, 16.6f, 16.6f)
+                path.moveTo(11f, 6.1f)
+                path.cubicTo(16.9f, 5.4f, 21f, 12f, 21f, 12f)
+                path.cubicTo(21f, 12f, 20.2f, 13.4f, 19.1f, 14.4f)
+                canvas.drawPath(path, pen)
+                canvas.drawArc(9.2f, 9.2f, 14.8f, 14.8f, 45f, 180f, false, pen)
+                canvas.drawLine(4f, 4f, 20f, 20f, pen)
             }
             Kind.LEFT -> stroke(canvas, 14, 7, 9, 12, 14, 17)
             Kind.RIGHT -> stroke(canvas, 10, 7, 15, 12, 10, 17)

@@ -46,9 +46,16 @@ internal fun <T : ShelfEntry> List<T>.orderedOnShelf(
         }).map { it.first }
 }
 
+internal data class HiddenBooks(val local: Set<String>, val online: Set<String>) {
+    operator fun contains(entry: ShelfEntry): Boolean = when (entry) {
+        is ShelfEntry.Local -> !entry.directory && entry.id in local
+        is ShelfEntry.Online -> !entry.directory && entry.id in online
+    }
+}
+
 internal fun recentShelfBooks(
     localBooks: List<FolderItem>, onlineBooks: List<WeReadEntry.Book>,
-    local: Map<String, Long>, online: Map<String, Long>, limit: Int,
+    local: Map<String, Long>, online: Map<String, Long>, hidden: HiddenBooks, limit: Int,
 ): List<ShelfEntry> = (localBooks.map(ShelfEntry::Local) + onlineBooks.map(ShelfEntry::Online))
-    .filter { !it.directory && it.openedAt(local, online) > 0 }
+    .filter { !it.directory && it !in hidden && it.openedAt(local, online) > 0 }
     .orderedOnShelf(FolderSort.LAST_OPENED, local, online).take(limit)
