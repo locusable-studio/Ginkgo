@@ -5,14 +5,13 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import android.util.LruCache
 import java.net.URI
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import javax.net.ssl.HttpsURLConnection
 
-/** Public thumbnails use the local shelf cache limits; uploaded covers live only in the displayed view. */
+/** Cache decoded thumbnails only, shared by official and uploaded books and scoped to the account. */
 internal class WeReadCovers private constructor(context: Context) {
     data class Target(val book: WeReadEntry.Book, val display: (Bitmap) -> Unit)
 
@@ -20,7 +19,6 @@ internal class WeReadCovers private constructor(context: Context) {
     private val memory = object : LruCache<String, Bitmap>(6 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
     }
-    private val failed = LruCache<String, Long>(128)
     private val worker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private var batch: Future<*>? = null
@@ -35,9 +33,10 @@ internal class WeReadCovers private constructor(context: Context) {
         val byBook = targets.groupBy { it.book }
         val pending = byBook.mapNotNull { (book, destinations) ->
             val uri = book.cover?.let(WeReadCoverUrl::normalize)
-            if (uri == null && (!book.isUploaded || session?.account != account)) return@mapNotNull null
-            val key = uri?.takeUnless { book.isUploaded }?.let { "$account/${book.id}/$it" }
-            val hit = key?.let(memory::get)
+            // An uploaded image's signed URL can change and is not stored in the shelf snapshot.
+            val key = if (book.isUploaded) "$account/${book.id}/uploaded"
+                else uri?.let { "$account/${book.id}/$it" } ?: return@mapNotNull null
+            val hit = memory.get(key)
             if (hit != null) {
                 destinations.forEach { it.display(hit) }
                 null
@@ -45,32 +44,28 @@ internal class WeReadCovers private constructor(context: Context) {
         }
         if (pending.isEmpty()) return
         batch = worker.submit {
-            fun publish(key: String?, bitmap: Bitmap, destinations: List<Target>) {
-                if (key != null) memory.put(key, bitmap)
-                main.post { if (generation == request) destinations.forEach { it.display(bitmap) } }
+            fun publish(key: String, bitmap: Bitmap, destinations: List<Target>) {
+                main.post {
+                    if (generation == request) {
+                        memory.put(key, bitmap)
+                        destinations.forEach { it.display(bitmap) }
+                    }
+                }
             }
             val missing = pending.filter { (key, _, destinations) ->
                 if (Thread.currentThread().isInterrupted) return@submit
-                val cached = key?.let(disk::read)
+                val cached = disk.read(key)
                 if (cached != null) publish(key, cached, destinations)
                 cached == null
             }
+            val activeSession = session?.takeIf { it.account == account }
             for ((key, uri, destinations) in missing) {
                 if (Thread.currentThread().isInterrupted) break
-                val now = SystemClock.elapsedRealtime()
-                if (key != null && (failed.get(key) ?: -1L) > now) continue
                 val book = destinations.first().book
-                val bitmap = uri?.let(::fetch) ?: if (session?.account == account && book.isUploaded) {
-                    val detail = try { WeReadWeb.uploadedBookCover(session, book.id) } catch (_: Exception) { null }
-                    detail?.let(WeReadCoverUrl::normalize)?.takeUnless { it == uri }?.let(::fetch)
-                } else null
-                if (Thread.currentThread().isInterrupted) break
-                if (bitmap != null) {
-                    if (key != null) disk.write(key, bitmap)
-                    publish(key, bitmap, destinations)
-                } else if (key != null) {
-                    failed.put(key, now + 12_000)
-                }
+                val bitmap = fetchBookCover(book, uri, activeSession) ?: continue
+                // A view replacement must not discard a successfully decoded image.
+                disk.write(key, bitmap)
+                publish(key, bitmap, destinations)
             }
         }
     }
@@ -82,7 +77,6 @@ internal class WeReadCovers private constructor(context: Context) {
     fun clear() {
         stopBatch()
         memory.evictAll()
-        failed.evictAll()
         worker.execute(disk::clear)
     }
 
@@ -91,6 +85,20 @@ internal class WeReadCovers private constructor(context: Context) {
         generation++
         batch?.cancel(true)
         batch = null
+    }
+
+    private fun fetchBookCover(book: WeReadEntry.Book, primary: URI?, session: WeReadWeb.Session?): Bitmap? {
+        if (!book.isUploaded) return primary?.let(::fetch)
+        if (session == null) return null
+        val attempted = mutableSetOf<URI>()
+        fun tryCover(uri: URI?): Bitmap? =
+            if (uri != null && attempted.add(uri) && !Thread.currentThread().isInterrupted) fetch(uri) else null
+
+        tryCover(primary)?.let { return it }
+        tryCover(WeReadCoverUrl.uploadedCover(book.id))?.let { return it }
+        if (Thread.currentThread().isInterrupted) return null
+        val detail = try { WeReadWeb.uploadedBookCover(session, book.id) } catch (_: Exception) { null }
+        return tryCover(detail?.let(WeReadCoverUrl::normalize))
     }
 
     private fun fetch(initial: URI): Bitmap? = try {

@@ -3,7 +3,6 @@ package com.locusable.ginkgo
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
-import java.text.Collator
 
 internal const val WEREAD_COVER_URL_LIMIT = 4096
 
@@ -12,10 +11,9 @@ internal fun String.isWeReadUploadId() = startsWith("CB_")
 internal sealed interface WeReadEntry {
     val id: String
     val name: String
-    val readAt: Long
 
     data class Book(
-        override val id: String, override val name: String, override val readAt: Long,
+        override val id: String, override val name: String, val readAt: Long,
         val cover: String?, val readerLink: String?,
     ) : WeReadEntry {
         val isUploaded get() = id.isWeReadUploadId()
@@ -23,17 +21,7 @@ internal sealed interface WeReadEntry {
 
     data class Group(
         override val id: String, override val name: String, val books: List<Book>,
-    ) : WeReadEntry {
-        override val readAt = books.maxOfOrNull { it.readAt } ?: 0L
-    }
-}
-
-internal fun List<WeReadEntry>.orderedForWeRead(sort: FolderSort): List<WeReadEntry> {
-    val byName = compareBy<WeReadEntry, String>(Collator.getInstance()) { it.name }
-        .thenBy { it.name }.thenBy { it.id }
-    val foldersFirst = compareBy<WeReadEntry> { it !is WeReadEntry.Group }
-    return sortedWith(if (sort == FolderSort.NAME) foldersFirst.then(byName)
-        else foldersFirst.thenByDescending { it.readAt }.then(byName))
+    ) : WeReadEntry
 }
 
 internal data class WeReadShelf(

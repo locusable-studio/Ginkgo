@@ -66,7 +66,7 @@ internal object WeReadWeb {
     fun shelf(session: Session, cached: WeReadShelf?): Pair<WeReadShelf, Session> {
         val cookies = session.cookies.toMutableMap()
         val json = jsonRequest("/web/shelf/sync", cookies, limit = WEREAD_SHELF_LIMIT)
-        if (json.errorCode() == -2012) throw Expired()
+        if (json.sessionRejected()) throw Expired()
         if (json.errorCode() != 0) throw Rejected()
         val updated = session(session.account, cookies) ?: throw Expired()
         return WeReadShelf.parse(json, cached) to updated
@@ -84,8 +84,10 @@ internal object WeReadWeb {
         if (session.cookies["wr_rt"].isNullOrEmpty()) throw Expired()
         val cookies = session.cookies.toMutableMap()
         val json = jsonRequest("/web/login/renewal", cookies, """{"rq":"%2Fweb%2Fbook%2Fread","ql":false}""")
-        if (json.errorCode() == -2012 || (json.has("succeed") && !json.optBoolean("succeed"))) throw Expired()
-        if (json.errorCode() != 0 || !json.optBoolean("succeed")) throw Rejected()
+        if (json.sessionRejected() || (json.has("succeed") && !json.optBoolean("succeed"))) throw Expired()
+        if (json.errorCode() != 0) throw Rejected()
+        // An HTTP success without a flag is inconclusive. The caller tests the returned
+        // cookie jar against the shelf once before persisting the session as accepted.
         json.value("accessToken", 4096)?.let { cookies["wr_skey"] = it }
         json.value("refreshToken", 4096)?.let { cookies["wr_rt"] = Uri.encode(it) }
         return session(session.account, cookies) ?: throw Expired()
@@ -100,6 +102,7 @@ internal object WeReadWeb {
     private val cookieName = Regex("wr_[a-zA-Z0-9_]{1,32}")
     private fun safeCookie(value: String) = value.length <= 6144 && value.all { it.code in 33..126 && it !in ";,\\\"" }
     private fun JSONObject.errorCode() = optInt("errCode", optInt("errcode", 0))
+    private fun JSONObject.sessionRejected() = errorCode() == -2010 || errorCode() == -2012
 
     private fun jsonRequest(
         path: String, cookies: MutableMap<String, String>, body: String? = null,

@@ -12,7 +12,8 @@ import android.graphics.drawable.Drawable
 import android.net.Uri
 import java.text.Collator
 
-internal const val MAX_PINS = 12
+internal const val MAX_PINS = 4
+internal const val MAX_RECENT_BOOKS = 4
 
 internal data class AppEntry(
     val component: ComponentName,
@@ -91,6 +92,7 @@ internal class AppCatalog(private val context: Context) {
 internal class InkPreferences(context: Context) {
     private val prefs = context.getSharedPreferences("ink", Context.MODE_PRIVATE)
     private val folderOpens by lazy { context.getSharedPreferences("folder_open_times", Context.MODE_PRIVATE) }
+    private val weReadOpens by lazy { context.getSharedPreferences("weread_open_times", Context.MODE_PRIVATE) }
 
     init {
         if (prefs.contains("recent_files") || prefs.contains("recent_expanded")) {
@@ -114,21 +116,10 @@ internal class InkPreferences(context: Context) {
         get() = prefs.getBoolean("show_apps_tab", true)
         set(value) { prefs.edit().putBoolean("show_apps_tab", value).apply() }
 
-    var showFolderTab: Boolean
-        get() = prefs.getBoolean("show_folder_tab", true)
-        set(value) { prefs.edit().putBoolean("show_folder_tab", value).apply() }
-
-    var showWeReadTab: Boolean
-        get() = prefs.getBoolean("show_weread_tab", true)
-        set(value) { prefs.edit().putBoolean("show_weread_tab", value).apply() }
-
-    var weReadShelf: Boolean
-        get() = prefs.getBoolean("weread_shelf", false)
-        set(value) { prefs.edit().putBoolean("weread_shelf", value).apply() }
-
-    var weReadSort: FolderSort
-        get() = if (prefs.getBoolean("weread_sort_recent", false)) FolderSort.LAST_OPENED else FolderSort.NAME
-        set(value) { prefs.edit().putBoolean("weread_sort_recent", value == FolderSort.LAST_OPENED).apply() }
+    var showShelfTab: Boolean
+        get() = prefs.getBoolean("show_shelf_tab",
+            prefs.getBoolean("show_folder_tab", true) || prefs.getBoolean("show_weread_tab", true))
+        set(value) { prefs.edit().putBoolean("show_shelf_tab", value).apply() }
 
     var showAboutTab: Boolean
         get() = prefs.getBoolean("show_about_tab", true)
@@ -138,26 +129,41 @@ internal class InkPreferences(context: Context) {
         get() = prefs.getBoolean("home_grid", false)
         set(value) { prefs.edit().putBoolean("home_grid", value).apply() }
 
-    var folderShelf: Boolean
-        get() = prefs.getBoolean("folder_shelf", false)
-        set(value) { prefs.edit().putBoolean("folder_shelf", value).apply() }
+    var shelfGrid: Boolean
+        get() = prefs.getBoolean("shelf_grid", prefs.getBoolean("folder_shelf", prefs.getBoolean("weread_shelf", false)))
+        set(value) { prefs.edit().putBoolean("shelf_grid", value).apply() }
 
-    var folderSort: FolderSort
+    var shelfSort: FolderSort
         get() {
-            val saved = prefs.getString("folder_sort", null)
-            return when (saved) {
-                null -> if (prefs.getBoolean("folder_sort_by_opened", false)) FolderSort.LAST_OPENED else FolderSort.NAME
-                else -> FolderSort.entries.firstOrNull { it.name == saved } ?: FolderSort.NAME
-            }
+            val saved = prefs.getString("shelf_sort", null) ?: prefs.getString("folder_sort", null)
+            val legacyRecent = prefs.getBoolean("folder_sort_by_opened", prefs.getBoolean("weread_sort_recent", false))
+            return FolderSort.entries.firstOrNull { it.name == saved }
+                ?: if (legacyRecent) FolderSort.LAST_OPENED else FolderSort.NAME
         }
-        set(value) { prefs.edit().putString("folder_sort", value.name).remove("folder_sort_by_opened").apply() }
+        set(value) { prefs.edit().putString("shelf_sort", value.name).apply() }
 
-    fun folderOpenTimes(): Map<String, Long> = folderOpens.all.mapValues { (_, time) -> time as? Long ?: 0L }
+    fun folderOpenTimes(): Map<String, Long> = folderOpens.all.mapNotNull { (id, time) ->
+        (time as? Long)?.let { id to it }
+    }.toMap()
 
-    // Only the latest timestamp per entry is needed; it is never shown as history.
     fun recordFolderOpen(location: FolderLocation) {
         folderOpens.edit().putLong(location.id, System.currentTimeMillis()).apply()
     }
+
+    fun weReadOpenTimes(account: String?): Map<String, Long> {
+        if (account == null || weReadOpens.getString("account", null) != account) return emptyMap()
+        return weReadOpens.all.mapNotNull { (key, time) ->
+            (time as? Long)?.let { key.removePrefix("book:") to it }
+        }.toMap()
+    }
+
+    fun recordWeReadOpen(account: String, bookId: String) {
+        val edit = weReadOpens.edit()
+        if (weReadOpens.getString("account", null) != account) edit.clear().putString("account", account)
+        edit.putLong("book:$bookId", System.currentTimeMillis()).apply()
+    }
+
+    fun clearWeReadOpenTimes() = weReadOpens.edit().clear().apply()
 
     fun pinned() = prefs.getString("pins", "").orEmpty().lineSequence().filter { it.isNotEmpty() }.toList()
 
@@ -171,5 +177,5 @@ internal class InkPreferences(context: Context) {
         savePins(base.map { it.key }.distinct())
     }
 
-    fun savePins(keys: List<String>) = prefs.edit().putString("pins", keys.joinToString("\n")).apply()
+    fun savePins(keys: List<String>) = prefs.edit().putString("pins", keys.take(MAX_PINS).joinToString("\n")).apply()
 }

@@ -19,10 +19,7 @@ internal fun Activity.showPaperDialog(
     primaryLabel: String,
     onConfirm: (() -> Unit)? = null,
 ): Dialog {
-    val dialog = Dialog(this).apply {
-        requestWindowFeature(Window.FEATURE_NO_TITLE)
-        setCanceledOnTouchOutside(true)
-    }
+    val dialog = paperDialog()
     val panel = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(PAGE_INSET_DP), dp(20), dp(PAGE_INSET_DP), dp(20))
@@ -57,15 +54,25 @@ internal fun Activity.showPaperDialog(
        else LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
     panel.addView(buttons, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(20) })
     dialog.setContentView(panel)
-    dialog.window?.apply {
+    presentPaperDialog(dialog)
+    return dialog
+}
+
+internal fun Activity.paperDialog(secure: Boolean = false): Dialog = Dialog(this).apply {
+    requestWindowFeature(Window.FEATURE_NO_TITLE)
+    setCanceledOnTouchOutside(true)
+    window?.apply {
         setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+        if (secure) addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         setDimAmount(0.15f)
         setWindowAnimations(0)
         setGravity(Gravity.CENTER)
     }
+}
+
+internal fun Activity.presentPaperDialog(dialog: Dialog) {
     dialog.show()
     val width = (resources.displayMetrics.widthPixels - dp(PAGE_INSET_DP * 2)).coerceIn(dp(1), dp(340))
     dialog.window?.setLayout(width, WRAP_CONTENT)
-    return dialog
 }

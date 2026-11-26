@@ -3,7 +3,7 @@ package com.locusable.ginkgo
 import java.text.BreakIterator
 import java.util.Locale
 
-internal fun coverTitlePreview(name: String): String {
+internal fun bookTitlePreview(name: String): String {
     val title = name.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ').trim()
     val breaks = BreakIterator.getCharacterInstance(Locale.ROOT).apply { setText(title) }
     var end = breaks.first()
@@ -12,5 +12,5 @@ internal fun coverTitlePreview(name: String): String {
         if (next == BreakIterator.DONE) return title
         end = next
     }
-    return title.substring(0, end)
+    return if (end == title.length) title else title.substring(0, end) + "…"
 }

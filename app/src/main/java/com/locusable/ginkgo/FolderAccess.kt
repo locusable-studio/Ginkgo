@@ -28,15 +28,10 @@ internal enum class FolderSort(val label: String) {
     NAME("按名称"), LAST_OPENED("按最近打开"),
 }
 
-private val directoriesFirst = compareBy<FolderItem> { !it.isDirectory }
-
-// FolderAccess provides directories first and filename order within each group. Stable sorting keeps
-// that name order for entries tied by timestamp or that have never been opened.
+// FolderAccess provides name order. Stable sorting preserves it for equal or missing open times.
 internal fun List<FolderItem>.orderedBy(sort: FolderSort, times: Map<String, Long>): List<FolderItem> = when (sort) {
     FolderSort.NAME -> this
-    FolderSort.LAST_OPENED -> if (times.isEmpty()) this else sortedWith(
-        directoriesFirst.thenByDescending { times[it.location.id] ?: Long.MIN_VALUE },
-    )
+    FolderSort.LAST_OPENED -> if (times.isEmpty()) this else sortedByDescending { times[it.location.id] ?: Long.MIN_VALUE }
 }
 
 internal sealed interface FolderContents {
@@ -82,7 +77,7 @@ internal object FolderAccess {
                 }
                 val byName = compareBy<FolderItem, String>(Collator.getInstance()) { it.location.name }
                     .thenBy { it.location.name }
-                if (children == null) FolderContents.Unavailable else FolderContents.Items(children.sortedWith(directoriesFirst.then(byName)))
+                if (children == null) FolderContents.Unavailable else FolderContents.Items(children.sortedWith(byName))
             }
         }
     } catch (_: IOException) {
@@ -90,6 +85,17 @@ internal object FolderAccess {
     } catch (_: SecurityException) {
         FolderContents.Unavailable
     }
+
+    fun recentBooks(opened: Map<String, Long>, limit: Int): List<FolderItem> = opened.asSequence()
+        .filter { (_, time) -> time > 0 }
+        .sortedWith(compareByDescending<Map.Entry<String, Long>> { it.value }.thenBy { it.key })
+        .mapNotNull { (path) ->
+            val name = File(path).name
+            if (name.startsWith('.') || bookExtension(name) !in bookTypes) return@mapNotNull null
+            val location = FolderLocation(path, name)
+            val file = book(location) ?: return@mapNotNull null
+            FolderItem(location, false, file.lastModified(), file.length())
+        }.take(limit).toList()
 
     fun book(location: FolderLocation): File? = try {
         val root = root()

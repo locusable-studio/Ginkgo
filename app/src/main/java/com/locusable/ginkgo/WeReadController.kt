@@ -37,15 +37,15 @@ internal class WeReadController private constructor(private val context: Context
     fun observe(listener: () -> Unit) {
         if (!observers.add(listener)) return
         listener()
-        whenLoaded { if (listener in observers) sync() }
+        whenLoaded()
     }
 
-    fun whenLoaded(ready: () -> Unit) {
+    fun whenLoaded(ready: (() -> Unit)? = null) {
         if (state != State.LOADING) {
-            ready()
+            ready?.invoke()
             return
         }
-        loadedCallbacks.add(ready)
+        if (ready != null) loadedCallbacks.add(ready)
         if (started) return
         started = true
         runTask(store::load) { result ->
@@ -134,6 +134,7 @@ internal class WeReadController private constructor(private val context: Context
         runTask({ store.save(WeReadSnapshot()) }) { result ->
             if (result.isSuccess) {
                 WeReadCovers.get(context).clear()
+                InkPreferences(context).clearWeReadOpenTimes()
                 snapshot = WeReadSnapshot()
             }
             setState(State.IDLE)
@@ -179,7 +180,10 @@ internal class WeReadController private constructor(private val context: Context
             val reopened = store.load().session
             if (reopened?.account != session.account || reopened.cookies != session.cookies) throw IOException()
         }) {
-            if (snapshot.account != null && snapshot.account != after.account) WeReadCovers.get(context).clear()
+            if (snapshot.account != null && snapshot.account != after.account) {
+                WeReadCovers.get(context).clear()
+                InkPreferences(context).clearWeReadOpenTimes()
+            }
             snapshot = after
             setState(State.IDLE)
             // Successful authorization should still open the online shelf if local storage is temporarily unavailable.

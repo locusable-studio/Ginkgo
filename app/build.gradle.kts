@@ -10,8 +10,8 @@ android {
         applicationId = "com.locusable.ginkgo"
         minSdk = 27
         targetSdk = 34
-        versionCode = 28
-        versionName = "0.4.19"
+        versionCode = 46
+        versionName = "0.4.37"
     }
 
     compileOptions {
