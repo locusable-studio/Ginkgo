@@ -25,20 +25,18 @@ internal data class FolderItem(
 private fun bookExtension(name: String) = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
 
 internal enum class FolderSort(val label: String) {
-    NAME("按文件名"), LAST_OPENED("按上次打开时间"), TYPE("按类型"),
+    NAME("按名称"), LAST_OPENED("按最近打开"),
 }
 
 private val directoriesFirst = compareBy<FolderItem> { !it.isDirectory }
 
 // FolderAccess provides directories first and filename order within each group. Stable sorting keeps
-// that name order for ties, including files of the same type and items that have never been opened.
+// that name order for entries tied by timestamp or that have never been opened.
 internal fun List<FolderItem>.orderedBy(sort: FolderSort, times: Map<String, Long>): List<FolderItem> = when (sort) {
     FolderSort.NAME -> this
     FolderSort.LAST_OPENED -> if (times.isEmpty()) this else sortedWith(
         directoriesFirst.thenByDescending { times[it.location.id] ?: Long.MIN_VALUE },
     )
-    FolderSort.TYPE -> sortedWith(directoriesFirst
-        .thenBy { if (it.isDirectory) "" else it.extension })
 }
 
 internal sealed interface FolderContents {

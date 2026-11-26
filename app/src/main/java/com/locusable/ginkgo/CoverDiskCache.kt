@@ -9,8 +9,8 @@ import java.io.IOException
 import java.security.MessageDigest
 
 /** Best-effort private thumbnail cache, accessed only by the shelf worker. */
-internal class CoverDiskCache(context: Context) {
-    private val directory = File(context.cacheDir, "shelf-covers-v1")
+internal class CoverDiskCache(context: Context, name: String = "shelf-covers-v1") {
+    private val directory = File(context.cacheDir, name)
     private var bytes: Long? = null
 
     fun read(key: String): Bitmap? = try {
@@ -48,6 +48,15 @@ internal class CoverDiskCache(context: Context) {
                 // Cleanup is best effort as well.
             }
         }
+    }
+
+    fun clear() {
+        try {
+            directory.deleteRecursively()
+        } catch (_: SecurityException) {
+            // This is a best-effort cleanup of regenerable thumbnails.
+        }
+        bytes = null
     }
 
     private fun coverFile(key: String): File {

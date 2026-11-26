@@ -12,7 +12,7 @@ import android.graphics.drawable.Drawable
 import android.net.Uri
 import java.text.Collator
 
-internal const val MAX_PINS = 8
+internal const val MAX_PINS = 12
 
 internal data class AppEntry(
     val component: ComponentName,
@@ -118,6 +118,18 @@ internal class InkPreferences(context: Context) {
         get() = prefs.getBoolean("show_folder_tab", true)
         set(value) { prefs.edit().putBoolean("show_folder_tab", value).apply() }
 
+    var showWeReadTab: Boolean
+        get() = prefs.getBoolean("show_weread_tab", true)
+        set(value) { prefs.edit().putBoolean("show_weread_tab", value).apply() }
+
+    var weReadShelf: Boolean
+        get() = prefs.getBoolean("weread_shelf", false)
+        set(value) { prefs.edit().putBoolean("weread_shelf", value).apply() }
+
+    var weReadSort: FolderSort
+        get() = if (prefs.getBoolean("weread_sort_recent", false)) FolderSort.LAST_OPENED else FolderSort.NAME
+        set(value) { prefs.edit().putBoolean("weread_sort_recent", value == FolderSort.LAST_OPENED).apply() }
+
     var showAboutTab: Boolean
         get() = prefs.getBoolean("show_about_tab", true)
         set(value) { prefs.edit().putBoolean("show_about_tab", value).apply() }
@@ -133,8 +145,10 @@ internal class InkPreferences(context: Context) {
     var folderSort: FolderSort
         get() {
             val saved = prefs.getString("folder_sort", null)
-            return FolderSort.entries.firstOrNull { it.name == saved }
-                ?: if (prefs.getBoolean("folder_sort_by_opened", false)) FolderSort.LAST_OPENED else FolderSort.NAME
+            return when (saved) {
+                null -> if (prefs.getBoolean("folder_sort_by_opened", false)) FolderSort.LAST_OPENED else FolderSort.NAME
+                else -> FolderSort.entries.firstOrNull { it.name == saved } ?: FolderSort.NAME
+            }
         }
         set(value) { prefs.edit().putString("folder_sort", value.name).remove("folder_sort_by_opened").apply() }
 

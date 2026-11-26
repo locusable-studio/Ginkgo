@@ -2,7 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <queries>
+        <package android:name="com.tencent.weread.eink" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
@@ -15,6 +18,7 @@
 
     <application
         android:allowBackup="false"
+        android:usesCleartextTraffic="false"
         android:icon="@mipmap/ic_ginkgo"
         android:roundIcon="@mipmap/ic_ginkgo"
         android:label="@string/app_name"
