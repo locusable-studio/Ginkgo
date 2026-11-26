@@ -5,11 +5,12 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
-import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelFileDescriptor
 import android.util.LruCache
 import org.xmlpull.v1.XmlPullParserException
+import java.io.File
 import java.io.IOException
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -18,18 +19,19 @@ import kotlin.math.roundToInt
 internal enum class CoverFormat { EPUB, PDF }
 
 /** One background queue, with bounded thumbnail and mosaic caches for the shelf. */
-internal class ShelfCovers(private val context: Context, private val folders: FolderAccess) {
+internal class ShelfCovers(private val context: Context) {
     sealed interface Target {
         data class File(val item: FolderItem, val display: (Bitmap) -> Unit) : Target
         data class Directory(val location: FolderLocation, val display: (List<Face>) -> Unit) : Target
     }
     data class Face(val name: String, val bitmap: Bitmap?)
-    private data class Key(val uri: Uri, val modified: Long, val format: CoverFormat, val edge: Int) {
-        // Some document providers don't expose a modification timestamp. Don't persist those previews.
-        fun diskKey(): String? = if (modified > 0) "$edge:$format:$modified:$uri" else null
+    private data class Key(
+        val location: FolderLocation, val modified: Long, val size: Long, val format: CoverFormat, val edge: Int,
+    ) {
+        fun diskKey(): String? = if (modified > 0) "$edge:$format:$modified:$size:${location.id}" else null
     }
     private data class Preview(val bitmap: Bitmap?)
-    private data class MosaicKey(val binding: Uri, val location: String, val sort: FolderSort, val openRevision: Int)
+    private data class MosaicKey(val location: String, val sort: FolderSort, val openRevision: Int)
     private data class Mosaic(val items: List<FolderItem>, val faces: List<Face>)
 
     private val cache = object : LruCache<Key, Preview>(6 * 1024 * 1024) {
@@ -46,13 +48,13 @@ internal class ShelfCovers(private val context: Context, private val folders: Fo
     private var generation = 0
 
     fun show(
-        binding: BoundFolder?, targets: List<Target>, sort: FolderSort, opened: Map<String, Long>,
+        targets: List<Target>, sort: FolderSort, opened: Map<String, Long>,
         openRevision: (FolderLocation) -> Int,
     ) {
         val request = ++generation
         batch?.cancel(true)
         batch = null
-        if (binding == null || targets.isEmpty()) return
+        if (targets.isEmpty()) return
         val files = targets.filterIsInstance<Target.File>().mapNotNull { target ->
             val key = target.item.coverKey(THUMBNAIL_EDGE) ?: return@mapNotNull null
             val hit = cache.get(key)
@@ -63,7 +65,7 @@ internal class ShelfCovers(private val context: Context, private val folders: Fo
         }
         val directories = targets.filterIsInstance<Target.Directory>().map { directory ->
             val revision = if (sort == FolderSort.LAST_OPENED) openRevision(directory.location) else 0
-            val key = MosaicKey(binding.uri, directory.location.id, sort, revision)
+            val key = MosaicKey(directory.location.id, sort, revision)
             val cached = mosaics.get(key)
             cached?.faces?.takeIf { it.isNotEmpty() }?.let(directory.display)
             Triple(directory, key, cached)
@@ -77,7 +79,7 @@ internal class ShelfCovers(private val context: Context, private val folders: Fo
             }
             for ((directory, key, cached) in directories) {
                 if (Thread.currentThread().isInterrupted) return@submit
-                val children = folders.contents(binding, directory.location) as? FolderContents.Items
+                val children = FolderAccess.contents(directory.location) as? FolderContents.Items
                 val items = children?.entries.orEmpty().orderedBy(sort, opened).asSequence()
                     .filterNot { it.isDirectory }.take(4).toList()
                 if (cached?.items == items) continue
@@ -99,7 +101,7 @@ internal class ShelfCovers(private val context: Context, private val folders: Fo
         }
     }
 
-    private fun FolderItem.coverKey(edge: Int): Key? = coverFormat?.let { Key(uri, lastModified, it, edge) }
+    private fun FolderItem.coverKey(edge: Int): Key? = coverFormat?.let { Key(location, lastModified, size, it, edge) }
 
     private fun load(key: Key): Bitmap? {
         cache.get(key)?.let { return it.bitmap }
@@ -120,9 +122,11 @@ internal class ShelfCovers(private val context: Context, private val folders: Fo
     }
 
     private fun thumbnail(key: Key): Bitmap? = try {
-        when (key.format) {
-            CoverFormat.EPUB -> epubCover(context, key.uri) { decodeThumbnail(it, key.edge) }
-            CoverFormat.PDF -> pdfCover(key.uri, key.edge)
+        FolderAccess.book(key.location)?.let { file ->
+            when (key.format) {
+                CoverFormat.EPUB -> epubCover(file) { decodeThumbnail(it, key.edge) }
+                CoverFormat.PDF -> pdfCover(file, key.edge)
+            }
         }
     } catch (_: IOException) {
         null
@@ -133,8 +137,8 @@ internal class ShelfCovers(private val context: Context, private val folders: Fo
         null
     }
 
-    private fun pdfCover(uri: Uri, edge: Int): Bitmap? {
-        val descriptor = context.contentResolver.openFileDescriptor(uri, "r") ?: return null
+    private fun pdfCover(file: File, edge: Int): Bitmap? {
+        val descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         val pdf = try {
             PdfRenderer(descriptor) // Owns the descriptor only after a successful construction.
         } catch (failure: Exception) {

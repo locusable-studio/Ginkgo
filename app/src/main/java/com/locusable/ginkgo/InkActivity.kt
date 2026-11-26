@@ -37,21 +37,19 @@ import java.util.concurrent.Executors
 
 class InkActivity : Activity() {
     private enum class Page(val title: String) {
-        HOME("首页"), APPS("应用"), SETTINGS("设置"), FOLDER("自定义目录"), ABOUT("关于"),
+        HOME("首页"), APPS("应用"), SETTINGS("设置"), FOLDER("本地书架"), ABOUT("关于"),
     }
 
     private companion object {
-        const val PICK_FOLDER = 110
-        const val READ_LOCAL_FOLDERS = 111
+        const val READ_LOCAL_BOOKS = 111
         const val HOME_COLUMNS = 4
         const val SHELF_COLUMNS = 4
     }
 
     private val prefs by lazy { InkPreferences(this) }
     private val catalog by lazy { AppCatalog(this) }
-    private val folderAccess by lazy { FolderAccess(applicationContext) }
     private val folderWorker = Executors.newSingleThreadExecutor()
-    private val covers by lazy { ShelfCovers(applicationContext, folderAccess) }
+    private val covers by lazy { ShelfCovers(applicationContext) }
     private val grayscale = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f) })
     private val developer get() = getString(R.string.app_developer)
     @Suppress("DEPRECATION")
@@ -61,11 +59,10 @@ class InkActivity : Activity() {
         "${info.versionName.orEmpty()}($build)"
     }
     private var apps = emptyList<AppEntry>()
-    private var boundFolder: BoundFolder? = null
     private val visiblePages get() = buildList {
         add(Page.HOME)
         if (prefs.showAppsTab) add(Page.APPS)
-        if (boundFolder != null && prefs.showFolderTab) add(Page.FOLDER)
+        if (prefs.showFolderTab) add(Page.FOLDER)
         if (prefs.showAboutTab) add(Page.ABOUT)
         add(Page.SETTINGS)
     }
@@ -76,6 +73,7 @@ class InkActivity : Activity() {
     private var folderTrail = emptyList<FolderLocation>()
     private var folderContents: FolderContents = FolderContents.Loading
     private var folderRequest = 0
+    private var pendingBook: FolderItem? = null
     private var folderOrderDirty = false
     private val mosaicRevisions = mutableMapOf<String, Int>()
     private var pinDialog: Dialog? = null
@@ -84,7 +82,6 @@ class InkActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced = false
-        boundFolder = prefs.boundFolder()
         val tab = savedInstanceState?.getInt("page", 0) ?: 0
         page = Page.entries.getOrElse(tab) { Page.HOME }.takeIf { it in visiblePages } ?: Page.HOME
         appPage = savedInstanceState?.getInt("app_page", 0) ?: 0
@@ -104,29 +101,9 @@ class InkActivity : Activity() {
         super.onDestroy()
     }
 
-    @Deprecated("Folder selection uses the Android 8.1 activity result API")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != PICK_FOLDER || resultCode != RESULT_OK || data == null) return
-        val previous = boundFolder
-        val selected = try {
-            folderAccess.retain(data, previous)
-        } catch (_: RuntimeException) {
-            toast("无法访问所选目录，请重新选择")
-            return
-        }
-        prefs.saveFolder(selected)
-        boundFolder = selected
-        if (previous != null && previous.uri != selected.uri) {
-            folderAccess.release(previous.uri)
-            if (previous.isLocal) LegacyFolders.clearReaderLinks(this)
-        }
-        folderRequest++
-        folderTrail = listOf(selected.root)
-        folderPage = 0
-        folderContents = FolderContents.Loading
-        render(scrollY = body?.scrollY ?: 0)
-        if (page == Page.FOLDER) reloadFolder()
+    override fun onPause() {
+        pendingBook = null
+        super.onPause()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -147,7 +124,7 @@ class InkActivity : Activity() {
     @Deprecated("Android 8.1 uses key-based navigation")
     override fun onBackPressed() {
         when {
-            page == Page.FOLDER && folderTrail.size > 1 -> navigateFolder(folderTrail.dropLast(1))
+            page == Page.FOLDER && folderTrail.isNotEmpty() -> navigateFolder(folderTrail.dropLast(1))
             page != Page.HOME -> show(Page.HOME)
             !isDefaultHome() -> super.onBackPressed()
         }
@@ -167,6 +144,7 @@ class InkActivity : Activity() {
     private fun show(next: Page) {
         if (next !in visiblePages) return
         if (page != next && next == Page.APPS) appPage = 0
+        if (next != Page.FOLDER) pendingBook = null
         page = next
         render()
         if (next == Page.FOLDER) reloadFolder()
@@ -208,7 +186,7 @@ class InkActivity : Activity() {
         root.addView(footer(pages), LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         setContentView(root)
         renderedPages = pages
-        covers.show(if (inFolder) boundFolder else null, coverTargets, sort, opened) { location ->
+        covers.show(coverTargets, sort, opened) { location ->
             mosaicRevisions[location.id] ?: 0
         }
         if (scrollY > 0) scroll.post { scroll.scrollTo(0, scrollY) }
@@ -329,23 +307,26 @@ class InkActivity : Activity() {
         coverTargets: MutableList<ShelfCovers.Target>, sort: FolderSort, opened: Map<String, Long>,
     ) = with(content) {
         val trail = folderTrail
-        val name = trail.lastOrNull()?.name ?: boundFolder?.name.orEmpty()
+        val name = trail.lastOrNull()?.name ?: Page.FOLDER.title
         title(name, folderSortButton(sort))
-        if (trail.size > 1) {
+        if (trail.isNotEmpty()) {
             folderRow("返回上一级", InkGlyph.Kind.LEFT, null) { navigateFolder(trail.dropLast(1)) }
         }
         var total = 1
         when (val result = folderContents) {
             FolderContents.Loading -> folderNotice("正在读取目录…")
-            FolderContents.Unavailable -> {
-                folderNotice("无法读取此目录，可能已移动或取消授权。")
-                folderRow("重新选择目录", InkGlyph.Kind.FILE, InkGlyph.Kind.RIGHT) { chooseFolder() }
+            FolderContents.PermissionRequired -> {
+                folderNotice("需要存储读取权限才能显示内部存储的 Books 目录。")
+                addView(this@InkActivity.paperButton("允许读取存储", primary = true) { requestBooksPermission() })
             }
+            FolderContents.Unsupported -> folderNotice("此系统不支持直接读取 Books 目录。")
+            FolderContents.Missing -> folderNotice("内部存储里还没有 Books 目录。可在多看书架导入书籍后再回来。")
+            FolderContents.Unavailable -> folderNotice("无法读取此目录，请检查 Books 目录是否可用。")
             is FolderContents.Items -> {
                 val entries = result.entries.orderedBy(sort, opened)
                 section("目录内容", "${entries.size} 项")
                 when {
-                    entries.isEmpty() -> folderNotice("这个目录是空的")
+                    entries.isEmpty() -> folderNotice("这个目录没有多看支持的书籍")
                     prefs.folderShelf -> {
                         val pageSize = SHELF_COLUMNS * 2
                         total = (entries.size - 1) / pageSize + 1
@@ -469,14 +450,26 @@ class InkActivity : Activity() {
             navigateFolder(folderTrail + item.location)
             return
         }
-        val readerUri = if (boundFolder?.isLocal == true) LegacyFolders.readerUri(this, item) else item.uri
-        if (!tryStart(item.viewIntent(readerUri))) {
-            toast("没有应用能打开此文件")
-            return
+        if (pendingBook != null) return
+        pendingBook = item
+        folderWorker.execute {
+            val bookId = FolderAccess.book(item.location)?.let(DuokanBookLink::idFor)
+            runOnUiThread {
+                if (isDestroyed || pendingBook !== item) return@runOnUiThread
+                pendingBook = null
+                if (bookId == null) {
+                    toast("无法读取这本书")
+                    return@runOnUiThread
+                }
+                if (!tryStart(DuokanBookLink.intent(bookId))) {
+                    toast("未找到支持续读链接的多看阅读器")
+                    return@runOnUiThread
+                }
+                prefs.recordFolderOpen(item.location)
+                folderTrail.lastOrNull()?.id?.let { id -> mosaicRevisions[id] = (mosaicRevisions[id] ?: 0) + 1 }
+                folderOrderDirty = prefs.folderSort == FolderSort.LAST_OPENED
+            }
         }
-        prefs.recordFolderOpen(item.location)
-        folderTrail.lastOrNull()?.id?.let { id -> mosaicRevisions[id] = (mosaicRevisions[id] ?: 0) + 1 }
-        folderOrderDirty = prefs.folderSort == FolderSort.LAST_OPENED
     }
 
     private fun folderSortButton(sort: FolderSort) = horizontal().apply {
@@ -605,6 +598,7 @@ class InkActivity : Activity() {
     }
 
     private fun navigateFolder(trail: List<FolderLocation>) {
+        pendingBook = null
         folderTrail = trail
         folderPage = 0
         folderContents = FolderContents.Loading
@@ -613,47 +607,44 @@ class InkActivity : Activity() {
     }
 
     private fun reloadFolder() {
-        val binding = boundFolder ?: return
-        if (folderTrail.isEmpty()) folderTrail = listOf(binding.root)
-        val location = folderTrail.last()
+        val location = folderTrail.lastOrNull()
         val request = ++folderRequest
+        val gate = when {
+            Build.VERSION.SDK_INT > 28 -> FolderContents.Unsupported
+            !hasBooksPermission() -> FolderContents.PermissionRequired
+            else -> null
+        }
+        if (gate != null) {
+            updateFolder(gate)
+            return
+        }
         folderWorker.execute {
-            val result = folderAccess.contents(binding, location)
+            val result = FolderAccess.contents(location)
             runOnUiThread {
-                if (request != folderRequest || isDestroyed || result == folderContents) return@runOnUiThread
-                folderContents = result
-                if (page == Page.FOLDER) render(scrollY = body?.scrollY ?: 0)
+                if (request == folderRequest && !isDestroyed) updateFolder(result)
             }
         }
     }
 
+    private fun updateFolder(result: FolderContents) {
+        if (result == folderContents) return
+        folderContents = result
+        if (page == Page.FOLDER) render(scrollY = body?.scrollY ?: 0)
+    }
+
     @Suppress("DEPRECATION")
-    private fun chooseFolder() {
-        val local = Build.VERSION.SDK_INT <= 28 &&
-            (boundFolder?.isLocal == true || packageManager.resolveContentProvider("com.android.externalstorage.documents", 0) == null)
-        if (local && checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE), READ_LOCAL_FOLDERS)
-            return
-        }
-        val picker = if (local) {
-            Intent(this, LocalFolderPickerActivity::class.java).apply {
-                boundFolder?.takeIf { it.isLocal }?.uri?.path?.let { putExtra(LegacyFolders.EXTRA_LOCAL_DIRECTORY, it) }
-            }
-        } else folderAccess.picker(boundFolder)
-        try {
-            startActivityForResult(picker, PICK_FOLDER)
-        } catch (_: ActivityNotFoundException) {
-            toast("此系统未提供目录选择器")
-        } catch (_: SecurityException) {
-            toast("无法打开目录选择器")
-        }
+    private fun hasBooksPermission() = checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+
+    @Suppress("DEPRECATION")
+    private fun requestBooksPermission() {
+        requestPermissions(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE), READ_LOCAL_BOOKS)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode != READ_LOCAL_FOLDERS) return
-        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) chooseFolder()
-        else toast("需要存储读取权限才能选择内部目录")
+        if (requestCode != READ_LOCAL_BOOKS) return
+        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) reloadFolder()
+        else toast("可在应用权限中允许 Ginkgo 读取存储")
     }
 
     private fun fillAbout(content: LinearLayout) = with(content) {
@@ -699,7 +690,10 @@ class InkActivity : Activity() {
             prefs.showAppsTab = checked
             render(scrollY = body?.scrollY ?: 0)
         }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        addView(folderOption(), LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        addView(visibilityOption(Page.FOLDER.title, prefs.showFolderTab) { checked ->
+            prefs.showFolderTab = checked
+            render(scrollY = body?.scrollY ?: 0)
+        }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         addView(visibilityOption("关于", prefs.showAboutTab) { checked ->
             prefs.showAboutTab = checked
             render(scrollY = body?.scrollY ?: 0)
@@ -709,7 +703,7 @@ class InkActivity : Activity() {
         section("展示方式", "")
         gap(4)
         layoutChoice("首页", "图标网格", prefs.homeGrid) { prefs.homeGrid = it }
-        layoutChoice("自定义目录", "书架", prefs.folderShelf) {
+        layoutChoice(Page.FOLDER.title, "书架", prefs.folderShelf) {
             prefs.folderShelf = it
             folderPage = 0
         }
@@ -789,29 +783,6 @@ class InkActivity : Activity() {
     private fun visibilityTitle(name: String) = label(name, 17f).apply {
         maxLines = 2
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-    }
-
-    private fun folderOption() = horizontal().apply {
-        val folder = boundFolder
-        addVisibilityCheck(visibilityCheck("显示自定义目录", checked = folder != null && prefs.showFolderTab, enabled = folder != null) { checked ->
-            prefs.showFolderTab = checked
-            render(scrollY = body?.scrollY ?: 0)
-        })
-        val name = folder?.name ?: "未选择"
-        val choose = horizontal().apply {
-            minimumHeight = dp(ACTION_HEIGHT_DP)
-            contentDescription = "自定义目录，$name"
-            addView(visibilityTitle("自定义目录"), LinearLayout.LayoutParams(0, WRAP_CONTENT, 1.2f))
-            addView(label(name, 14f, tone = SOFT_INK).apply {
-                gravity = Gravity.END or Gravity.CENTER_VERTICAL
-                maxLines = 1
-                ellipsize = TextUtils.TruncateAt.END
-                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
-            addView(InkGlyph(this@InkActivity, InkGlyph.Kind.RIGHT), LinearLayout.LayoutParams(dp(29), dp(30)))
-            action { chooseFolder() }
-        }
-        addView(choose, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
     }
 
     private fun LinearLayout.title(text: String, accessory: View? = null) {
@@ -957,7 +928,7 @@ class InkActivity : Activity() {
         val tabs = horizontal()
         pages.forEach { item ->
             val selected = page == item
-            val destination = if (item == Page.FOLDER) boundFolder?.name ?: item.title else item.title
+            val destination = item.title
             val cell = column().apply {
                 contentDescription = destination
                 isSelected = selected

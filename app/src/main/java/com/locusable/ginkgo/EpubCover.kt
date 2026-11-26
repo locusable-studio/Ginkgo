@@ -1,34 +1,26 @@
 package com.locusable.ginkgo
 
-import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import android.util.Xml
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserException
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.InputStream
 import java.util.Locale
 import java.util.zip.ZipFile
-import java.util.zip.ZipInputStream
 
 private const val MAX_XML = 512 * 1024
 private const val MAX_IMAGE = 12 * 1024 * 1024
 private val rasterExtensions = setOf("jpg", "jpeg", "png", "gif", "webp", "bmp")
 
 /** Reads EPUB metadata and one embedded image, without opening the book or extracting it to disk. */
-internal fun epubCover(context: Context, uri: Uri, decode: (ByteArray) -> Bitmap?): Bitmap? {
-    val local = LegacyFolders.boundFile(context, uri)
-    if (local != null) {
-        return ZipFile(local).use { zip ->
-            readEpubCover({ path, limit ->
-                zip.getEntry(path)?.takeUnless { it.isDirectory || it.size > limit }
-                    ?.let { entry -> zip.getInputStream(entry).use { it.readBounded(limit) } }
-            }, decode)
-        }
-    }
-    val stream = StreamArchive { context.contentResolver.openInputStream(uri) }
-    return readEpubCover(stream::read, decode)
+internal fun epubCover(file: File, decode: (ByteArray) -> Bitmap?): Bitmap? = ZipFile(file).use { zip ->
+    readEpubCover({ path, limit ->
+        zip.getEntry(path)?.takeUnless { it.isDirectory || it.size > limit }
+            ?.let { entry -> zip.getInputStream(entry).use { it.readBounded(limit) } }
+    }, decode)
 }
 
 private typealias ReadMember = (String, Int) -> ByteArray?
@@ -135,34 +127,4 @@ private fun InputStream.readBounded(limit: Int): ByteArray? {
         bytes.write(buffer, 0, read)
     }
     return null
-}
-
-/** Document providers need not expose a filesystem path. Bound scans across all member lookups. */
-private class StreamArchive(private val source: () -> InputStream?) {
-    private var budget = 48 * 1024 * 1024
-
-    fun read(path: String, limit: Int): ByteArray? {
-        if (budget <= 0 || Thread.currentThread().isInterrupted) return null
-        return source()?.let { input ->
-            ZipInputStream(input.buffered()).use { zip ->
-                val skip = ByteArray(8192)
-                while (budget > 0 && !Thread.currentThread().isInterrupted) {
-                    val entry = zip.nextEntry ?: break
-                    budget -= 256 // Also count empty entries toward the scan limit.
-                    if (!entry.isDirectory && entry.name == path) {
-                        if (entry.size > limit) return@use null
-                        return@use zip.readBounded(minOf(limit, budget.coerceAtLeast(0))).also {
-                            budget -= it?.size ?: limit
-                        }
-                    }
-                    while (budget > 0 && !Thread.currentThread().isInterrupted) {
-                        val count = zip.read(skip, 0, minOf(skip.size, budget))
-                        if (count < 0) break
-                        budget -= count
-                    }
-                }
-                null
-            }
-        }
-    }
 }

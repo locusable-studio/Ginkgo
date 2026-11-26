@@ -34,11 +34,5 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name=".LocalFolderPickerActivity" android:exported="false" />
-        <provider
-            android:name=".GinkgoFilesProvider"
-            android:authorities="${applicationId}.files"
-            android:exported="false"
-            android:grantUriPermissions="true" />
     </application>
 </manifest>
