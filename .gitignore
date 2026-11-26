@@ -1,0 +1,32 @@
+# Android and Gradle build output
+.gradle/
+.kotlin/
+build/
+.cxx/
+.externalNativeBuild/
+*.apk
+*.aab
+*.apks
+*.idsig
+
+# Machine-local settings and generated screenshots
+local.properties
+.idea/
+*.iml
+.claude/settings.local.json
+captures/
+/preview/
+.DS_Store
+Thumbs.db
+
+# Local signing material and credentials
+*.jks
+*.keystore
+*.p12
+*.pfx
+keystore.properties
+signing.properties
+store-password.txt
+.env
+.env.*
+!.env.example
