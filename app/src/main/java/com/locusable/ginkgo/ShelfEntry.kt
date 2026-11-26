@@ -35,15 +35,17 @@ private fun WeReadEntry.Book.openedAt(opened: Map<String, Long>): Long {
 }
 
 internal fun <T : ShelfEntry> List<T>.orderedOnShelf(
-    sort: FolderSort, local: Map<String, Long>, online: Map<String, Long>,
+    sort: FolderSort, local: Map<String, Long>, online: Map<String, Long>, hidden: HiddenBooks? = null,
 ): List<T> {
     val byName = compareBy<T, String>(Collator.getInstance()) { it.name }
         .thenBy { it.name }.thenBy { it.id }
-    if (sort == FolderSort.NAME) return sortedWith(byName)
-    return map { it to it.openedAt(local, online) }
+    val ordered = if (sort == FolderSort.NAME) sortedWith(byName) else map { it to it.openedAt(local, online) }
         .sortedWith(compareByDescending<Pair<T, Long>> { it.second }.then { a, b ->
             byName.compare(a.first, b.first)
         }).map { it.first }
+    if (hidden == null || (hidden.local.isEmpty() && hidden.online.isEmpty())) return ordered
+    val (visible, hiddenEntries) = ordered.partition { it !in hidden }
+    return visible + hiddenEntries
 }
 
 internal data class HiddenBooks(val local: Set<String>, val online: Set<String>) {

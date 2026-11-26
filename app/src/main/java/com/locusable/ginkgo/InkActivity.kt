@@ -58,6 +58,7 @@ class InkActivity : Activity() {
         const val TILE_ROW_GAP = 12
         const val SHELF_COLUMNS = 4
         const val PAGER_TEXT_SP = 13f
+        const val COVER_OUTLINE = 0xFFC9C9C9.toInt()
     }
 
     private val prefs by lazy { InkPreferences(this) }
@@ -458,7 +459,7 @@ class InkActivity : Activity() {
             }
         } else {
             showPagedList(content, scroll, rows, pager, apps, appPage, alwaysShowPager = false,
-                title = ::displayLabel, hasPin = { it.key in pinned },
+                title = ::displayLabel, badgeFor = { if (it.key in pinned) InkGlyph.Kind.PIN else null },
                 onPage = { appPage = it }, makeRow = { appRow(it, pinned = it.key in pinned) })
         }
     }
@@ -512,7 +513,7 @@ class InkActivity : Activity() {
             if (folder == null) {
                 (group?.books ?: cloudShelf?.root).orEmpty().forEach { add(ShelfEntry.Online(it)) }
             }
-        }.orderedOnShelf(sort, opened, onlineOpened)
+        }.orderedOnShelf(sort, opened, onlineOpened, hidden)
         collectionHeader(group?.name ?: folder?.name ?: Page.SHELF.title, accessory = sorting, leading = back)
         if (group == null && local == FolderContents.PermissionRequired) {
             addView(this@InkActivity.paperButton("允许读取本地图书", primary = false) { requestBooksPermission() },
@@ -543,7 +544,8 @@ class InkActivity : Activity() {
             updatePager(pager, shelfPage, total) { shelfPage += it; render() }
         } else {
             showPagedList(content, scroll, addRows(), pager, entries, shelfPage, alwaysShowPager = true,
-                title = ShelfEntry::name, singleLine = true, onPage = { shelfPage = it }) {
+                title = ShelfEntry::name, badgeFor = { if (it in hidden) InkGlyph.Kind.EYE_OFF else null },
+                singleLine = true, onPage = { shelfPage = it }) {
                 shelfListRow(it, hiddenOnHome = it in hidden)
             }
         }
@@ -583,10 +585,10 @@ class InkActivity : Activity() {
     private fun <T> showPagedList(
         content: LinearLayout, scroll: ScrollView, rows: LinearLayout, pager: FrameLayout,
         entries: List<T>, initialPage: Int, alwaysShowPager: Boolean,
-        title: (T) -> String, hasPin: (T) -> Boolean = { false }, singleLine: Boolean = false,
+        title: (T) -> String, badgeFor: (T) -> InkGlyph.Kind? = { null }, singleLine: Boolean = false,
         onPage: (Int) -> Unit, makeRow: (T) -> View,
     ) = showPagedRows(content, scroll, rows, pager, initialPage, alwaysShowPager,
-        measure = { width -> measureRows(entries, width, title, hasPin, singleLine) }, onPage = onPage) { range ->
+        measure = { width -> measureRows(entries, width, title, badgeFor, singleLine) }, onPage = onPage) { range ->
         for (index in range) rows.addView(makeRow(entries[index]))
     }
 
@@ -641,17 +643,17 @@ class InkActivity : Activity() {
     }
 
     private fun <T> measureRows(
-        entries: List<T>, width: Int, title: (T) -> String, hasPin: (T) -> Boolean, singleLine: Boolean,
+        entries: List<T>, width: Int, title: (T) -> String, badgeFor: (T) -> InkGlyph.Kind?, singleLine: Boolean,
     ): IntArray {
-        fun sample(pin: Boolean) = PaperRow("", InkGlyph(this, InkGlyph.Kind.DOCUMENT), InkGlyph.Kind.ARROW,
-            showPin = pin, singleLine = singleLine)
-        val plain = sample(false)
-        val pinned by lazy { sample(true) }
+        val samples = mutableMapOf<InkGlyph.Kind?, PaperRow>()
         val widthSpec = View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY)
         val heightSpec = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
         return IntArray(entries.size) { index ->
             val item = entries[index]
-            val row = if (hasPin(item)) pinned else plain
+            val badge = badgeFor(item)
+            val row = samples.getOrPut(badge) {
+                PaperRow("", InkGlyph(this, InkGlyph.Kind.DOCUMENT), InkGlyph.Kind.ARROW, badge, singleLine)
+            }
             row.titleView.text = title(item)
             row.titleView.forceLayout()
             row.forceLayout()
@@ -677,7 +679,8 @@ class InkActivity : Activity() {
     private fun shelfListRow(entry: ShelfEntry, hiddenOnHome: Boolean = false): View {
         val icon = if (entry.directory) InkGlyph.Kind.FILE else InkGlyph.Kind.DOCUMENT
         val arrow = if (entry.directory) InkGlyph.Kind.RIGHT else InkGlyph.Kind.ARROW
-        return PaperRow(entry.name, InkGlyph(this, icon), arrow, singleLine = true).apply {
+        val badge = if (hiddenOnHome) InkGlyph.Kind.EYE_OFF else null
+        return PaperRow(entry.name, InkGlyph(this, icon), arrow, badge, singleLine = true).apply {
             contentDescription = buildString {
                 append(entry.name)
                 if (entry is ShelfEntry.Online) append("，微信读书")
@@ -842,6 +845,8 @@ class InkActivity : Activity() {
     }
 
     private inner class CoverFrame : FrameLayout(this@InkActivity) {
+        init { foreground = paperShape(COVER_OUTLINE, Color.TRANSPARENT) }
+
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
             val width = MeasureSpec.getSize(widthMeasureSpec)
             val height = (width * 3 + 1) / 2
@@ -851,7 +856,7 @@ class InkActivity : Activity() {
 
     private fun FrameLayout.showCoverTitle(name: String, compact: Boolean = false) {
         removeAllViews()
-        background = paperShape(0xFFC9C9C9.toInt(), 0xFFF7F7F7.toInt())
+        background = paperShape(if (compact) COVER_OUTLINE else Color.TRANSPARENT, 0xFFF7F7F7.toInt())
         val inset = dp(if (compact) 4 else 9)
         addView(column().apply {
             setPaddingRelative(inset, dp(if (compact) 7 else 14), inset, 0)
@@ -1384,10 +1389,14 @@ class InkActivity : Activity() {
         }
     }
 
-    private fun appRow(item: AppEntry, pinned: Boolean) =
-        PaperRow(displayLabel(item), appIcon(item), InkGlyph.Kind.ARROW, showPin = page == Page.APPS && pinned).apply {
+    private fun appRow(item: AppEntry, pinned: Boolean): View {
+        val name = displayLabel(item)
+        val badge = if (page == Page.APPS && pinned) InkGlyph.Kind.PIN else null
+        return PaperRow(name, appIcon(item), InkGlyph.Kind.ARROW, badge).apply {
+            if (badge != null) contentDescription = "$name，已固定"
             appAction(item, pinned)
         }
+    }
 
     private fun View.appAction(item: AppEntry, pinned: Boolean, stroke: Int = Color.TRANSPARENT) {
         action(stroke) { openApp(item) }
@@ -1452,7 +1461,7 @@ class InkActivity : Activity() {
     }
 
     private inner class PaperRow(
-        title: String, icon: View, trailing: InkGlyph.Kind?, showPin: Boolean = false, singleLine: Boolean = false,
+        title: String, icon: View, trailing: InkGlyph.Kind?, badge: InkGlyph.Kind? = null, singleLine: Boolean = false,
     ) : LinearLayout(this@InkActivity) {
         val titleView = label(title, ROW_TEXT_SP).apply {
             if (singleLine) setSingleLine(true) else maxLines = 2
@@ -1467,10 +1476,10 @@ class InkActivity : Activity() {
             layoutParams = LayoutParams(MATCH_PARENT, WRAP_CONTENT)
             minimumHeight = dp(ACTION_HEIGHT_DP)
             setPadding(dp(4), dp(5), dp(2), dp(5))
-            contentDescription = if (showPin) "$title，已固定" else title
+            contentDescription = title
             addView(icon, LayoutParams(dp(29), dp(30)))
             addView(titleView, LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(11) })
-            if (showPin) addView(InkGlyph(this@InkActivity, InkGlyph.Kind.PIN), LayoutParams(dp(22), dp(24)))
+            if (badge != null) addView(InkGlyph(this@InkActivity, badge), LayoutParams(dp(22), dp(24)))
             if (trailing != null) addView(InkGlyph(this@InkActivity, trailing, tone = SOFT_INK), LayoutParams(dp(29), dp(30)))
         }
     }
