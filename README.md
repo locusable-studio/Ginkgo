@@ -1,44 +1,21 @@
 # Ginkgo
 
-An e-ink launcher for the first-generation Xiaomi MiReader. Open your apps and books from one place; keep reading in Duokan or WeRead.
-
-[Screenshots](#screenshots) · [Installation](#installation)
+An e-ink launcher for the first-generation Xiaomi MiReader (Android 8.1).
 
 <p align="center">
-  <a href="docs/screenshots/home.png"><img src="docs/screenshots/home.png" width="280" alt="Ginkgo home screen on the Xiaomi MiReader"></a><br>
-  <em>Ginkgo on the first-generation Xiaomi MiReader.</em>
+  <a href="docs/screenshots/home.png"><img src="docs/screenshots/home.png" width="280" alt="Ginkgo home screen"></a>
 </p>
 
-## Screenshots
+## Bookshelf
 
-<details>
-<summary>More screens and the exported wallpaper</summary>
+Ginkgo brings local and WeRead books into one shelf. Tapping a book opens the original reading app via a deep link; Ginkgo does not import or display the book itself.
 
-<table>
-  <tr>
-    <td align="center">
-      <a href="docs/screenshots/apps.png"><img src="docs/screenshots/apps.png" width="120" alt="Apps"></a><br>Apps
-    </td>
-    <td align="center">
-      <a href="docs/screenshots/shelf.png"><img src="docs/screenshots/shelf.png" width="120" alt="Bookshelf"></a><br>Bookshelf
-    </td>
-    <td align="center">
-      <a href="docs/screenshots/about.png"><img src="docs/screenshots/about.png" width="120" alt="About"></a><br>About
-    </td>
-    <td align="center">
-      <a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" width="120" alt="Settings"></a><br>Settings
-    </td>
-    <td align="center">
-      <a href="docs/screenshots/wallpaper.png"><img src="docs/screenshots/wallpaper.png" width="120" alt="Exported cover wallpaper"></a><br>Cover wallpaper
-    </td>
-  </tr>
-</table>
-
-</details>
+- **Duokan:** Ginkgo shows books from `Books/` and passes only the book ID to Duokan. After copying new books, open **Duokan Desktop → Bookshelf** to refresh the shelf. Ginkgo may list a new book before Duokan indexes it, but its deep link will not work until the book is indexed.
+- **WeRead:** Sign in under **Settings → Account → WeRead** in Ginkgo to sync your shelf. Sign in separately in the **WeRead e-ink app** to read. Signing in to one does not sign you in to the other.
 
 ## Installation
 
-Tested on the first-generation Xiaomi MiReader (Android 8.1). Install the Ginkgo APK, then select Ginkgo when prompted to choose a launcher.
+Install the Ginkgo APK, then select Ginkgo when prompted to choose a launcher.
 
 ---
 
