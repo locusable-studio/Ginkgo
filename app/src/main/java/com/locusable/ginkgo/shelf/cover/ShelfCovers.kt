@@ -1,4 +1,4 @@
-package com.locusable.ginkgo
+package com.locusable.ginkgo.shelf.cover
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -9,14 +9,20 @@ import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.LruCache
-import org.xmlpull.v1.XmlPullParserException
+import com.locusable.ginkgo.shelf.ShelfSort
+import com.locusable.ginkgo.shelf.cache.CoverDiskCache
+import com.locusable.ginkgo.shelf.local.CoverFormat
+import com.locusable.ginkgo.shelf.local.FolderAccess
+import com.locusable.ginkgo.shelf.local.FolderContents
+import com.locusable.ginkgo.shelf.local.FolderItem
+import com.locusable.ginkgo.shelf.local.FolderLocation
+import com.locusable.ginkgo.shelf.orderedBy
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import kotlin.math.roundToInt
-
-internal enum class CoverFormat { EPUB, PDF }
+import org.xmlpull.v1.XmlPullParserException
 
 /** One background queue, with bounded thumbnail and mosaic caches for the shelf. */
 internal class ShelfCovers(private val context: Context) {
@@ -31,7 +37,7 @@ internal class ShelfCovers(private val context: Context) {
         fun diskKey(): String? = if (modified > 0) "$edge:$format:$modified:$size:${location.id}" else null
     }
     private data class Preview(val bitmap: Bitmap?)
-    private data class MosaicKey(val location: String, val sort: FolderSort, val openRevision: Int)
+    private data class MosaicKey(val location: String, val sort: ShelfSort, val openRevision: Int)
     private data class Mosaic(val items: List<FolderItem>, val faces: List<Face>)
 
     private val cache = object : LruCache<Key, Preview>(6 * 1024 * 1024) {
@@ -48,7 +54,7 @@ internal class ShelfCovers(private val context: Context) {
     private var generation = 0
 
     fun show(
-        targets: List<Target>, sort: FolderSort, opened: Map<String, Long>,
+        targets: List<Target>, sort: ShelfSort, opened: Map<String, Long>,
         openRevision: (FolderLocation) -> Int,
     ) {
         val request = ++generation
@@ -64,7 +70,7 @@ internal class ShelfCovers(private val context: Context) {
             }
         }
         val directories = targets.filterIsInstance<Target.Directory>().map { directory ->
-            val revision = if (sort == FolderSort.LAST_OPENED) openRevision(directory.location) else 0
+            val revision = if (sort == ShelfSort.LAST_OPENED) openRevision(directory.location) else 0
             val key = MosaicKey(directory.location.id, sort, revision)
             val cached = mosaics.get(key)
             cached?.faces?.takeIf { it.isNotEmpty() }?.let(directory.display)

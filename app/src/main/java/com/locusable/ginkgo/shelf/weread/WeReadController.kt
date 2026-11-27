@@ -1,4 +1,4 @@
-package com.locusable.ginkgo
+package com.locusable.ginkgo.shelf.weread
 
 import android.content.Context
 import android.os.Handler
@@ -24,6 +24,7 @@ internal class WeReadController private constructor(private val context: Context
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
     private val store = WeReadStore(context)
+    private val openHistory by lazy { WeReadOpenHistory(context) }
     private val observers = linkedSetOf<() -> Unit>()
     private var started = false
     private var login: WeReadWeb.Login? = null
@@ -134,7 +135,7 @@ internal class WeReadController private constructor(private val context: Context
         runTask({ store.save(WeReadSnapshot()) }) { result ->
             if (result.isSuccess) {
                 WeReadCovers.get(context).clear()
-                InkPreferences(context).clearWeReadOpenTimes()
+                openHistory.clear()
                 snapshot = WeReadSnapshot()
             }
             setState(State.IDLE)
@@ -182,7 +183,7 @@ internal class WeReadController private constructor(private val context: Context
         }) {
             if (snapshot.account != null && snapshot.account != after.account) {
                 WeReadCovers.get(context).clear()
-                InkPreferences(context).clearWeReadOpenTimes()
+                openHistory.clear()
             }
             snapshot = after
             setState(State.IDLE)

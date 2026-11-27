@@ -1,4 +1,4 @@
-package com.locusable.ginkgo
+package com.locusable.ginkgo.wallpaper
 
 import android.content.ContentValues
 import android.content.Context
@@ -15,6 +15,7 @@ import android.media.MediaScannerConnection
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import com.locusable.ginkgo.shelf.ShelfEntry
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException

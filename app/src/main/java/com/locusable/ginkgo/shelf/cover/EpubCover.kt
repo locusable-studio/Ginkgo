@@ -1,15 +1,15 @@
-package com.locusable.ginkgo
+package com.locusable.ginkgo.shelf.cover
 
 import android.graphics.Bitmap
 import android.net.Uri
 import android.util.Xml
-import org.xmlpull.v1.XmlPullParser
-import org.xmlpull.v1.XmlPullParserException
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import java.util.Locale
 import java.util.zip.ZipFile
+import org.xmlpull.v1.XmlPullParser
+import org.xmlpull.v1.XmlPullParserException
 
 private const val MAX_XML = 512 * 1024
 private const val MAX_IMAGE = 12 * 1024 * 1024

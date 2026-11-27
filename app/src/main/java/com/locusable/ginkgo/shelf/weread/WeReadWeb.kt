@@ -1,12 +1,12 @@
-package com.locusable.ginkgo
+package com.locusable.ginkgo.shelf.weread
 
 import android.net.Uri
-import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
+import org.json.JSONObject
 
 internal const val WEREAD_ORIGIN = "https://weread.qq.com"
 internal const val WEREAD_SHELF_LIMIT = 8 * 1024 * 1024

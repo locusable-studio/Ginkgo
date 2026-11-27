@@ -1,5 +1,7 @@
-package com.locusable.ginkgo
+package com.locusable.ginkgo.shelf
 
+import com.locusable.ginkgo.shelf.local.FolderItem
+import com.locusable.ginkgo.shelf.weread.WeReadEntry
 import java.text.Collator
 
 internal sealed interface ShelfEntry {
@@ -35,11 +37,11 @@ private fun WeReadEntry.Book.openedAt(opened: Map<String, Long>): Long {
 }
 
 internal fun <T : ShelfEntry> List<T>.orderedOnShelf(
-    sort: FolderSort, local: Map<String, Long>, online: Map<String, Long>, hidden: HiddenBooks? = null,
+    sort: ShelfSort, local: Map<String, Long>, online: Map<String, Long>, hidden: HiddenBooks? = null,
 ): List<T> {
     val byName = compareBy<T, String>(Collator.getInstance()) { it.name }
         .thenBy { it.name }.thenBy { it.id }
-    val ordered = if (sort == FolderSort.NAME) sortedWith(byName) else map { it to it.openedAt(local, online) }
+    val ordered = if (sort == ShelfSort.NAME) sortedWith(byName) else map { it to it.openedAt(local, online) }
         .sortedWith(compareByDescending<Pair<T, Long>> { it.second }.then { a, b ->
             byName.compare(a.first, b.first)
         }).map { it.first }
@@ -60,4 +62,4 @@ internal fun recentShelfBooks(
     local: Map<String, Long>, online: Map<String, Long>, hidden: HiddenBooks, limit: Int,
 ): List<ShelfEntry> = (localBooks.map(ShelfEntry::Local) + onlineBooks.map(ShelfEntry::Online))
     .filter { !it.directory && it !in hidden && it.openedAt(local, online) > 0 }
-    .orderedOnShelf(FolderSort.LAST_OPENED, local, online).take(limit)
+    .orderedOnShelf(ShelfSort.LAST_OPENED, local, online).take(limit)

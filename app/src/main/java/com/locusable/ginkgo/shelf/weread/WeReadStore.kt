@@ -1,12 +1,12 @@
-package com.locusable.ginkgo
+package com.locusable.ginkgo.shelf.weread
 
 import android.content.Context
 import android.system.Os
 import android.util.AtomicFile
-import org.json.JSONObject
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
+import org.json.JSONObject
 
 internal class WeReadSnapshot(
     val account: String? = null,

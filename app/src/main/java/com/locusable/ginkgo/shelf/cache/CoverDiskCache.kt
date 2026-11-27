@@ -1,4 +1,4 @@
-package com.locusable.ginkgo
+package com.locusable.ginkgo.shelf.cache
 
 import android.content.Context
 import android.graphics.Bitmap

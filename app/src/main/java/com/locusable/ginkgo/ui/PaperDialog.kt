@@ -1,4 +1,4 @@
-package com.locusable.ginkgo
+package com.locusable.ginkgo.ui
 
 import android.app.Activity
 import android.app.Dialog

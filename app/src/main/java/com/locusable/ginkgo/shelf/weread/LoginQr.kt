@@ -1,4 +1,4 @@
-package com.locusable.ginkgo
+package com.locusable.ginkgo.shelf.weread
 
 import kotlin.math.abs
 

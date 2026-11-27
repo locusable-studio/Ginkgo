@@ -1,4 +1,4 @@
-package com.locusable.ginkgo
+package com.locusable.ginkgo.ui
 
 import java.text.BreakIterator
 import java.util.Locale

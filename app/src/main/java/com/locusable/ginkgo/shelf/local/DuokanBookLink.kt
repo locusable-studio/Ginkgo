@@ -1,4 +1,4 @@
-package com.locusable.ginkgo
+package com.locusable.ginkgo.shelf.local
 
 import android.content.Intent
 import android.net.Uri

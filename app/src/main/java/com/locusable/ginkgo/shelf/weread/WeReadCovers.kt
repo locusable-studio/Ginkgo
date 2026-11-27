@@ -1,4 +1,4 @@
-package com.locusable.ginkgo
+package com.locusable.ginkgo.shelf.weread
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.LruCache
+import com.locusable.ginkgo.shelf.cache.CoverDiskCache
 import java.net.URI
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
