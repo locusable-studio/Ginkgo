@@ -85,8 +85,6 @@ private fun Context.resumeRow(book: ShelfEntry, cover: View, bindAuthor: ((Strin
             ellipsize = TextUtils.TruncateAt.END
         }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         addView(author, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(2) })
-        gap(4)
-        addView(label(source, CAPTION_TEXT_SP, tone = SOFT_INK), LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
     }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(13); marginEnd = dp(8) })
     addView(InkGlyph(context, InkGlyph.Kind.ARROW, tone = SOFT_INK).apply {
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO

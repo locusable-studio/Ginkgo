@@ -90,9 +90,11 @@ internal object WeReadWeb {
 
     private fun profileAvatar(source: String): Bitmap? {
         return try {
-            val uri = URI(source)
-            if (uri.scheme?.lowercase() !in setOf("http", "https") || uri.host?.lowercase() !in avatarHosts ||
-                uri.rawUserInfo != null || uri.port != -1 || uri.rawPath.isNullOrEmpty()) return null
+            val uri = URI(if (source.startsWith("//")) "https:$source" else source).normalize()
+            val host = uri.host?.lowercase() ?: return null
+            val path = uri.rawPath?.takeIf { it.isNotEmpty() } ?: return null
+            if (uri.scheme?.lowercase() !in setOf("http", "https") || uri.rawUserInfo != null || uri.port != -1) return null
+            if (host !in avatarHosts && !(host == "res.weread.qq.com" && path.startsWith("/wravatar/"))) return null
             val connection = URI("https:${uri.rawSchemeSpecificPart}").toURL().openConnection() as HttpsURLConnection
             val bytes = try {
                 connection.instanceFollowRedirects = false

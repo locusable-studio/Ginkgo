@@ -17,9 +17,6 @@ import com.locusable.ginkgo.shelf.local.FolderContents
 import com.locusable.ginkgo.shelf.local.FolderItem
 import com.locusable.ginkgo.shelf.local.FolderLocation
 import com.locusable.ginkgo.shelf.orderedBy
-import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
-import com.tom_roush.pdfbox.io.MemoryUsageSetting
-import com.tom_roush.pdfbox.pdmodel.PDDocument
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.Executors
@@ -170,28 +167,13 @@ internal class ShelfCovers(private val context: Context) {
     }
 
     private fun readAuthor(item: FolderItem): Author? = try {
-        FolderAccess.book(item.location)?.let { file ->
-            Author(when (item.coverFormat) {
-                CoverFormat.EPUB -> epubAuthor(file)
-                CoverFormat.PDF -> pdfAuthor(file)
-                null -> null
-            })
-        }
+        FolderAccess.book(item.location)?.let { Author(epubAuthor(it)) }
     } catch (_: IOException) {
         null
     } catch (_: XmlPullParserException) {
         Author(null)
     } catch (_: RuntimeException) {
         null
-    }
-
-    private fun pdfAuthor(file: File): String? {
-        if (file.length() !in 1..64L * 1024 * 1024) return null
-        PDFBoxResourceLoader.init(context.applicationContext)
-        val memory = MemoryUsageSetting.setupMixed(2L * 1024 * 1024, 32L * 1024 * 1024).setTempDir(context.cacheDir)
-        return PDDocument.load(file, memory).use { document ->
-            document.documentInformation.author?.trim()?.takeIf { it.length in 1..256 }
-        }
     }
 
     private fun pdfCover(file: File, edge: Int): Bitmap? {
