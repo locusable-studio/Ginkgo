@@ -8,17 +8,15 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import com.locusable.ginkgo.launcher.AppEntry
-import com.locusable.ginkgo.launcher.LauncherPage
 import com.locusable.ginkgo.ui.ACTION_HEIGHT_DP
 import com.locusable.ginkgo.ui.TILE_ROW_GAP
 import com.locusable.ginkgo.ui.column
 import com.locusable.ginkgo.ui.dp
 import com.locusable.ginkgo.ui.notice
 import com.locusable.ginkgo.ui.tileRows
-import com.locusable.ginkgo.ui.title
 import com.locusable.ginkgo.ui.updatePager
 
-private const val APP_COLUMNS = 4
+internal const val APP_COLUMNS = 4
 
 internal fun LinearLayout.showApps(
     scroll: ScrollView,
@@ -29,7 +27,6 @@ internal fun LinearLayout.showApps(
     onPageChanged: (Int) -> Unit,
     tile: (AppEntry, Boolean) -> View,
 ) {
-    title(LauncherPage.APPS.title)
     if (apps.isEmpty()) {
         notice("没有可启动的应用")
         return

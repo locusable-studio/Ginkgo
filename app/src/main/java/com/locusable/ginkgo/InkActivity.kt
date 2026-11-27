@@ -36,7 +36,6 @@ import com.locusable.ginkgo.launcher.AppCatalog
 import com.locusable.ginkgo.launcher.AppEntry
 import com.locusable.ginkgo.launcher.LauncherPage
 import com.locusable.ginkgo.settings.InkPreferences
-import com.locusable.ginkgo.settings.MAX_PINS
 import com.locusable.ginkgo.settings.ShelfSources
 import com.locusable.ginkgo.shelf.HiddenBooks
 import com.locusable.ginkgo.shelf.ShelfEntry
@@ -78,7 +77,7 @@ import com.locusable.ginkgo.ui.dp
 import com.locusable.ginkgo.ui.gap
 import com.locusable.ginkgo.ui.horizontal
 import com.locusable.ginkgo.ui.label
-import com.locusable.ginkgo.ui.page.HOME_COLUMNS
+import com.locusable.ginkgo.ui.page.APP_COLUMNS
 import com.locusable.ginkgo.ui.page.HOME_RECENT_BOOK_LIMIT
 import com.locusable.ginkgo.ui.page.SHELF_PAGE_SIZE
 import com.locusable.ginkgo.ui.page.SettingsPage
@@ -143,6 +142,7 @@ class InkActivity : Activity() {
     }
     private var page = LauncherPage.HOME
     private var renderedPages = emptyList<LauncherPage>()
+    private var renderedPins = emptyList<String>()
     private var appPage = 0
     private var shelfPage = 0
     private var folderTrail = emptyList<FolderLocation>()
@@ -195,7 +195,7 @@ class InkActivity : Activity() {
     private var pendingBook: FolderItem? = null
     private var shelfOrderDirty = false
     private val mosaicRevisions = mutableMapOf<String, Int>()
-    private var homeEditDialog: Dialog? = null
+    private var editDialog: Dialog? = null
     private var body: ScrollView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -232,7 +232,7 @@ class InkActivity : Activity() {
 
     override fun onDestroy() {
         if (updateFlow.isInitialized()) updateFlow.value.close()
-        homeEditDialog?.dismiss()
+        editDialog?.dismiss()
         loginDialog?.dismiss()
         cancelWallpaperExport()
         wallpaperWorker.shutdownNow()
@@ -263,7 +263,7 @@ class InkActivity : Activity() {
                 updateFlow.value.pause()
                 updateFlow.value.awaitingPermission = null
             }
-            homeEditDialog?.dismiss()
+            editDialog?.dismiss()
             loginDialog?.dismiss()
             cancelWallpaperExport()
             show(LauncherPage.HOME)
@@ -289,14 +289,9 @@ class InkActivity : Activity() {
 
     private fun refresh() {
         val current = catalog.apps()
-        prefs.seedPins(current)
-        val storedPins = prefs.pinned()
-        if (storedPins.size > MAX_PINS) {
-            val available = current.mapTo(HashSet()) { it.key }
-            prefs.savePins(storedPins.filter { it in available })
-        }
         // Xiaomi may retain a HOME task and a separate launcher-entry task in the same process.
         if (body == null || renderedPages != visiblePages || apps != current || page == LauncherPage.SETTINGS ||
+            (page == LauncherPage.APPS && renderedPins != prefs.pinned()) ||
             (page == LauncherPage.SHELF && (shelfOrderDirty || renderedShelfSources != prefs.shelfSources ||
                 renderedHiddenBooks != prefs.hiddenBooks(weRead.snapshot.account))) ||
             (page == LauncherPage.HOME && renderedRecentBooks != homeBooks())) {
@@ -346,7 +341,7 @@ class InkActivity : Activity() {
         }
         body = scroll
         val withBooks = page == LauncherPage.SHELF || page == LauncherPage.HOME
-        val sort = if (page == LauncherPage.SHELF) prefs.shelfSort else ShelfSort.NAME
+        val sort = if (page == LauncherPage.SHELF) ShelfSort.LAST_OPENED else ShelfSort.NAME
         val opened = if (withBooks) prefs.folderOpenTimes() else emptyMap()
         val onlineOpened = if (withBooks) weReadHistory.times(weRead.snapshot.account) else emptyMap()
         panel.addView(scroll, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
@@ -356,8 +351,15 @@ class InkActivity : Activity() {
         val onlineCoverTargets = mutableListOf<WeReadCovers.Target>()
         when (page) {
             LauncherPage.HOME -> fillHome(content, coverTargets, onlineCoverTargets, opened, onlineOpened)
-            LauncherPage.APPS -> content.showApps(scroll, apps, prefs.pinned().toSet(), appPage, appTileHeight(),
-                onPageChanged = { appPage = it }, tile = { app, pinned -> appTile(app, pinned) })
+            LauncherPage.APPS -> {
+                val pins = prefs.pinned()
+                renderedPins = pins
+                val pinnedKeys = pins.toSet()
+                val byKey = apps.associateBy { it.key }
+                val ordered = pins.mapNotNull(byKey::get) + apps.filterNot { it.key in pinnedKeys }
+                content.showApps(scroll, ordered, pinnedKeys, appPage, appTileHeight(),
+                    onPageChanged = { appPage = it }, tile = ::appTile)
+            }
             LauncherPage.SHELF -> {
                 shelfOrderDirty = false
                 val pager = FrameLayout(this)
@@ -391,16 +393,13 @@ class InkActivity : Activity() {
         content: LinearLayout, localCovers: MutableList<ShelfCovers.Target>, onlineCovers: MutableList<WeReadCovers.Target>,
         opened: Map<String, Long>, onlineOpened: Map<String, Long>,
     ) {
-        val pins = prefs.pinned().mapNotNull { key -> apps.find { it.key == key } }.take(MAX_PINS)
         val books = homeBooks(opened, onlineOpened)
         renderedRecentBooks = books
         content.showHome(
-            pins, books,
+            books,
             booksReady = recentLocalBooks != null && weRead.state != WeReadController.State.LOADING,
-            appTileHeight = appTileHeight(),
             featuredCover = { book -> resumeCover(book, localCovers, onlineCovers) },
             recentBookTile = { book -> shelfTile(book, localCovers, onlineCovers, ShelfSort.NAME, onlineOpened) },
-            pinnedAppTile = { app -> appTile(app, pinned = true) },
             openBook = ::openShelfEntry,
         )
     }
@@ -431,11 +430,10 @@ class InkActivity : Activity() {
 
     private fun appTile(item: AppEntry, pinned: Boolean) = column().apply {
         val name = displayLabel(item)
-        val showPin = page == LauncherPage.APPS && pinned
-        contentDescription = if (showPin) "$name，已固定" else name
+        contentDescription = if (pinned) "$name，已置顶" else name
         gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
         setPadding(dp(2), dp(10), dp(2), dp(4))
-        val iconSize = minOf(60, ((resources.configuration.screenWidthDp - 88) / HOME_COLUMNS).coerceAtLeast(34))
+        val iconSize = minOf(60, ((resources.configuration.screenWidthDp - 88) / APP_COLUMNS).coerceAtLeast(34))
         val icon = catalog.icon(item)?.let { original ->
             ImageView(this@InkActivity).apply {
                 setImageDrawable(original)
@@ -444,7 +442,7 @@ class InkActivity : Activity() {
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             }
         } ?: InkGlyph(this@InkActivity, InkGlyph.Kind.APP, sizeDp = 35)
-        if (showPin) {
+        if (pinned) {
             addView(FrameLayout(this@InkActivity).apply {
                 addView(icon, FrameLayout.LayoutParams(dp(iconSize), dp(iconSize), Gravity.CENTER))
                 addView(InkGlyph(this@InkActivity, InkGlyph.Kind.PIN, sizeDp = 12).apply {
@@ -521,8 +519,7 @@ class InkActivity : Activity() {
         val index = if (entries.isEmpty()) 0 else shelfPage.coerceIn(0, total - 1).also { shelfPage = it }
         val start = index * SHELF_PAGE_SIZE
         val model = ShelfPageModel(
-            title = group?.name ?: folder?.name ?: LauncherPage.SHELF.title,
-            sort = sort.takeIf { hasSource },
+            folderName = group?.name ?: folder?.name,
             backLabel = backLabel,
             permissionRequired = local == FolderContents.PermissionRequired,
             notice = message,
@@ -532,11 +529,6 @@ class InkActivity : Activity() {
         )
         content.showShelf(model, pager,
             goBack = { if (group != null) navigateWeRead(null) else navigateFolder(trail.dropLast(1)) },
-            changeSort = {
-                prefs.shelfSort = it
-                shelfPage = 0
-                render()
-            },
             requestBooksPermission = ::requestBooksPermission,
             movePage = {
                 shelfPage += it
@@ -563,7 +555,7 @@ class InkActivity : Activity() {
             }
         }
         weRead.snapshot.account?.let { weReadHistory.record(it, book.id) }
-        shelfOrderDirty = prefs.shelfSort == ShelfSort.LAST_OPENED
+        shelfOrderDirty = true
     }
 
     private fun openShelfEntry(entry: ShelfEntry) {
@@ -599,7 +591,7 @@ class InkActivity : Activity() {
                 }
                 prefs.recordFolderOpen(item.location)
                 File(item.location.id).parent?.let { id -> mosaicRevisions[id] = (mosaicRevisions[id] ?: 0) + 1 }
-                shelfOrderDirty = prefs.shelfSort == ShelfSort.LAST_OPENED
+                shelfOrderDirty = true
             }
         }
     }
@@ -1022,7 +1014,7 @@ class InkActivity : Activity() {
 
     private fun View.appAction(item: AppEntry, pinned: Boolean, stroke: Int = Color.TRANSPARENT) {
         action(stroke) { openApp(item) }
-        confirmOnLongPress(if (pinned) "取消固定" else "固定到首页") { confirmPin(item) }
+        confirmOnLongPress(if (pinned) "取消置顶" else "置顶") { confirmPin(item) }
     }
 
     private fun View.bookVisibilityAction(entry: ShelfEntry, hiddenOnHome: Boolean) {
@@ -1040,12 +1032,12 @@ class InkActivity : Activity() {
 
     private fun confirmBookVisibility(entry: ShelfEntry, account: String?) {
         fun sameAccount() = entry is ShelfEntry.Local || (account != null && account == weRead.snapshot.account)
-        if (homeEditDialog?.isShowing == true || !sameAccount()) return
+        if (editDialog?.isShowing == true || !sameAccount()) return
         val hidden = entry in prefs.hiddenBooks(account)
         val title = if (hidden) "在首页显示？" else "在首页隐藏？"
         val message = if (hidden) "「${entry.name}」可以再次出现在首页的最近打开中。"
             else "将「${entry.name}」从首页隐藏，书籍仍保留在书架。"
-        trackHomeEditDialog(showPaperDialog(title, message, if (hidden) "显示" else "隐藏") {
+        trackEditDialog(showPaperDialog(title, message, if (hidden) "显示" else "隐藏") {
             if (sameAccount()) {
                 prefs.setBookHidden(entry, account, !hidden)
                 render(scrollY = body?.scrollY ?: 0)
@@ -1060,26 +1052,22 @@ class InkActivity : Activity() {
     }
 
     private fun confirmPin(item: AppEntry) {
-        if (homeEditDialog?.isShowing == true) return
-        val pinned = prefs.pinned().filter { key -> apps.any { it.key == key } }
+        if (editDialog?.isShowing == true) return
         val name = displayLabel(item)
-        val isPinned = item.key in pinned
-        val dialog = if (!isPinned && pinned.size >= MAX_PINS) {
-            showPaperDialog("首页已满", "首页最多固定 $MAX_PINS 个应用。取消一个后，再固定「$name」。", "知道了")
-        } else {
-            val title = if (isPinned) "取消固定？" else "固定到首页？"
-            val message = if (isPinned) "将「$name」从首页移除，应用仍然保留。" else "将「$name」添加到首页的常用应用。"
-            showPaperDialog(title, message, if (isPinned) "取消固定" else "固定") {
-                prefs.savePins(if (isPinned) pinned - item.key else pinned + item.key)
-                render(scrollY = body?.scrollY ?: 0)
-            }
-        }
-        trackHomeEditDialog(dialog)
+        val isPinned = item.key in prefs.pinned()
+        val title = if (isPinned) "取消置顶？" else "置顶应用？"
+        val message = if (isPinned) "「$name」将回到应用页的默认排序。" else "将「$name」移到应用页最前面。"
+        trackEditDialog(showPaperDialog(title, message, if (isPinned) "取消置顶" else "置顶") {
+            val pins = prefs.pinned() - item.key
+            prefs.savePins(if (isPinned) pins else listOf(item.key) + pins)
+            if (!isPinned) appPage = 0
+            render()
+        })
     }
 
-    private fun trackHomeEditDialog(dialog: Dialog) {
-        homeEditDialog = dialog
-        dialog.setOnDismissListener { if (homeEditDialog === dialog) homeEditDialog = null }
+    private fun trackEditDialog(dialog: Dialog) {
+        editDialog = dialog
+        dialog.setOnDismissListener { if (editDialog === dialog) editDialog = null }
     }
 
     private fun footer(pages: List<LauncherPage>) = column().apply {

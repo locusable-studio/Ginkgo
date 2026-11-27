@@ -2,8 +2,8 @@ package com.locusable.ginkgo.shelf
 
 import com.locusable.ginkgo.shelf.local.FolderItem
 
-internal enum class ShelfSort(val label: String) {
-    NAME("按名称"), LAST_OPENED("按最近打开"),
+internal enum class ShelfSort {
+    NAME, LAST_OPENED,
 }
 
 // FolderAccess provides name order. Stable sorting preserves it for equal or missing open times.

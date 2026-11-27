@@ -9,7 +9,6 @@ import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.LinearLayout
 import com.locusable.ginkgo.R
-import com.locusable.ginkgo.launcher.AppEntry
 import com.locusable.ginkgo.shelf.ShelfEntry
 import com.locusable.ginkgo.shelf.displayTitle
 import com.locusable.ginkgo.ui.CAPTION_TEXT_SP
@@ -28,19 +27,16 @@ import com.locusable.ginkgo.ui.section
 import com.locusable.ginkgo.ui.tileRows
 import com.locusable.ginkgo.ui.title
 
-internal const val HOME_COLUMNS = 4
+private const val HOME_COLUMNS = 4
 internal const val HOME_RECENT_BOOK_LIMIT = 4
 private const val HOME_SECTION_GAP_DP = 14
 private const val HOME_TILE_GAP_DP = 8
 
 internal fun LinearLayout.showHome(
-    pinnedApps: List<AppEntry>,
     recentBooks: List<ShelfEntry>,
     booksReady: Boolean,
-    appTileHeight: Int,
     featuredCover: (ShelfEntry) -> View,
     recentBookTile: (ShelfEntry) -> View,
-    pinnedAppTile: (AppEntry) -> View,
     openBook: (ShelfEntry) -> Unit,
 ) {
     val credit = context.label("by ${context.getString(R.string.app_developer)}", CAPTION_TEXT_SP, tone = SOFT_INK).apply {
@@ -62,14 +58,9 @@ internal fun LinearLayout.showHome(
             section("最近打开", "")
             tileRows(otherBooks, HOME_COLUMNS, rowGap = HOME_TILE_GAP_DP, tile = recentBookTile)
         }
-    }
-    if (pinnedApps.isNotEmpty()) {
-        gap(if (featured == null) PAGE_INSET_DP else HOME_SECTION_GAP_DP)
-        section("常用应用", "")
-        tileRows(pinnedApps, HOME_COLUMNS, rowHeight = appTileHeight, rowGap = HOME_TILE_GAP_DP, tile = pinnedAppTile)
-    } else if (featured == null && booksReady) {
+    } else if (booksReady) {
         gap(PAGE_INSET_DP)
-        notice("长按应用可固定到首页，打开过的书也会显示在这里。")
+        notice("打开一本书后，可以在这里继续阅读。")
     }
 }
 

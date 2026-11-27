@@ -19,10 +19,6 @@ internal data class AppEntry(
     val key: String get() = component.flattenToString()
     val isAndroidSettings: Boolean get() = component.packageName == "com.android.settings" && component.shortClassName == ".Settings"
     val isDeviceSettings: Boolean get() = component.packageName == "com.mgs.settings" && component.shortClassName == ".MgsSettingsActivity"
-    val isFileManager: Boolean get() = when (component.packageName) {
-        "com.softwinner.explore", "com.android.documentsui", "com.google.android.documentsui", "com.mi.android.globalFileexplorer" -> true
-        else -> false
-    }
     val isWeRead: Boolean get() = component.packageName == "com.tencent.weread" || component.packageName == "com.tencent.weread.eink"
 
     fun launchIntent() = Intent(Intent.ACTION_MAIN)

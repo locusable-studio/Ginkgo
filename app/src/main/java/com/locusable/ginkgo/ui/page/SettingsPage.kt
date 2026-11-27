@@ -24,7 +24,6 @@ import com.locusable.ginkgo.ui.label
 import com.locusable.ginkgo.ui.pressBackground
 import com.locusable.ginkgo.ui.section
 import com.locusable.ginkgo.ui.tileRows
-import com.locusable.ginkgo.ui.title
 
 internal class SettingsPage(
     private val context: Context,
@@ -35,7 +34,6 @@ internal class SettingsPage(
     private val checkUpdate: () -> Unit,
 ) {
     fun render(content: LinearLayout) = with(content) {
-        title("设置")
         section("显示页面", "")
         gap(4)
         val config = resources.configuration

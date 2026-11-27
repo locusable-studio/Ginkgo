@@ -1,7 +1,6 @@
 package com.locusable.ginkgo.ui.page
 
 import android.content.Context
-import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
@@ -9,12 +8,12 @@ import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import com.locusable.ginkgo.shelf.ShelfEntry
-import com.locusable.ginkgo.shelf.ShelfSort
 import com.locusable.ginkgo.ui.ACTION_HEIGHT_DP
 import com.locusable.ginkgo.ui.ACTION_TEXT_SP
 import com.locusable.ginkgo.ui.HEADING_GAP_DP
 import com.locusable.ginkgo.ui.InkGlyph
 import com.locusable.ginkgo.ui.LABEL_TEXT_SP
+import com.locusable.ginkgo.ui.LINE
 import com.locusable.ginkgo.ui.SOFT_INK
 import com.locusable.ginkgo.ui.action
 import com.locusable.ginkgo.ui.buttonRole
@@ -33,8 +32,7 @@ private const val SHELF_COLUMNS = 4
 internal const val SHELF_PAGE_SIZE = SHELF_COLUMNS * 2
 
 internal data class ShelfPageModel(
-    val title: String,
-    val sort: ShelfSort?,
+    val folderName: String?,
     val backLabel: String?,
     val permissionRequired: Boolean,
     val notice: String?,
@@ -47,17 +45,14 @@ internal fun LinearLayout.showShelf(
     model: ShelfPageModel,
     pager: FrameLayout,
     goBack: () -> Unit,
-    changeSort: (ShelfSort) -> Unit,
     requestBooksPermission: () -> Unit,
     movePage: (Int) -> Unit,
     tile: (ShelfEntry) -> View,
 ) {
     val permissionEmpty = model.permissionRequired && model.entries.isEmpty()
-    title(
-        model.title,
-        accessory = model.sort?.takeUnless { permissionEmpty }?.let { context.sortButton(it, changeSort) },
-        leading = model.backLabel?.let { context.shelfBackButton(it, goBack) },
-    )
+    model.folderName?.let { name ->
+        title(name, leading = model.backLabel?.let { context.shelfBackButton(it, goBack) })
+    }
     val paginated = !permissionEmpty && model.total > 1
     pager.visibility = if (paginated) View.VISIBLE else View.GONE
     if (permissionEmpty) {
@@ -97,27 +92,9 @@ private fun LinearLayout.showPermissionHint(requestPermission: () -> Unit) {
 }
 
 private fun Context.shelfBackButton(description: String, goBack: () -> Unit) = InkGlyph(this, InkGlyph.Kind.LEFT, sizeDp = 20).apply {
-    layoutParams = LinearLayout.LayoutParams(dp(ACTION_HEIGHT_DP), dp(ACTION_HEIGHT_DP))
+    layoutParams = LinearLayout.LayoutParams(dp(ACTION_HEIGHT_DP), dp(ACTION_HEIGHT_DP)).apply { marginEnd = dp(8) }
     contentDescription = description
     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
     buttonRole()
-    action(click = goBack)
-}
-
-private fun Context.sortButton(sort: ShelfSort, change: (ShelfSort) -> Unit) = horizontal().apply {
-    val current = sort.label
-    val next = ShelfSort.entries[(sort.ordinal + 1) % ShelfSort.entries.size]
-    gravity = Gravity.END or Gravity.CENTER_VERTICAL
-    minimumHeight = dp(ACTION_HEIGHT_DP)
-    minimumWidth = dp(112)
-    setPaddingRelative(dp(6), 0, dp(4), 0)
-    contentDescription = "排序方式：$current，点按切换为${next.label}"
-    addView(InkGlyph(this@sortButton, InkGlyph.Kind.SORT, sizeDp = 21), LinearLayout.LayoutParams(dp(24), dp(24)))
-    addView(label(current, LABEL_TEXT_SP).apply {
-        maxLines = 1
-        ellipsize = TextUtils.TruncateAt.END
-        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-    }, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(5) })
-    buttonRole()
-    action { change(next) }
+    action(stroke = LINE, click = goBack)
 }
