@@ -89,9 +89,35 @@ internal object FolderAccess {
             FolderItem(location, false, file.lastModified(), file.length())
         }.take(limit).toList()
 
-    fun book(location: FolderLocation): File? = try {
-        val root = root()
-        val file = File(location.id)
+    fun directoryOpenTimes(opened: Map<String, Long>): Map<String, Long> {
+        if (opened.isEmpty()) return emptyMap()
+        val root = shelfRoot() ?: return emptyMap()
+        return buildMap {
+            for ((path, time) in opened) {
+                if (Thread.currentThread().isInterrupted) break
+                if (time <= 0) continue
+                var parent = shelfBook(path, root)?.parentFile
+                while (parent != null && parent != root) {
+                    val id = parent.path
+                    if (time > (get(id) ?: 0L)) put(id, time)
+                    parent = parent.parentFile
+                }
+            }
+        }
+    }
+
+    fun book(location: FolderLocation): File? = shelfRoot()?.let { shelfBook(location.id, it) }
+
+    private fun shelfRoot(): File? = try {
+        root()
+    } catch (_: IOException) {
+        null
+    } catch (_: SecurityException) {
+        null
+    }
+
+    private fun shelfBook(path: String, root: File): File? = try {
+        val file = File(path)
         file.takeIf { it != root && it.isShelfPath(root) && it.isFile && it.canRead() && bookExtension(it.name) in bookTypes }
     } catch (_: IOException) {
         null

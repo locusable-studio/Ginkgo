@@ -72,9 +72,11 @@ import com.locusable.ginkgo.ui.LINE
 import com.locusable.ginkgo.ui.PAGE_BOTTOM_DP
 import com.locusable.ginkgo.ui.PAGE_INSET_DP
 import com.locusable.ginkgo.ui.PAGE_TOP_DP
+import com.locusable.ginkgo.ui.PRESS_FILL
 import com.locusable.ginkgo.ui.ROW_TEXT_SP
 import com.locusable.ginkgo.ui.SECTION_GAP_DP
 import com.locusable.ginkgo.ui.SOFT_INK
+import com.locusable.ginkgo.ui.TILE_COLUMN_GAP_DP
 import com.locusable.ginkgo.ui.TileScroll
 import com.locusable.ginkgo.ui.action
 import com.locusable.ginkgo.ui.bookAuthorLabel
@@ -118,15 +120,18 @@ class InkActivity : Activity() {
         const val READ_LOCAL_BOOKS = 111
         const val WRITE_WALLPAPER = 112
         const val MAX_HOME_BOOKS = 1 + HOME_RECENT_BOOK_LIMIT
-        const val APP_TILE_HEIGHT = 112
+        const val APP_ICON_DP = 52
+        const val APP_PIN_DP = 14
+        const val ABOUT_TOP_DP = 18
         const val COVER_OUTLINE = 0xFFC9C9C9.toInt()
     }
 
     private val prefs by lazy { InkPreferences(this) }
     private val updateFlow = lazy { UpdateFlow(this) }
+    private lateinit var navigation: LinearLayout
     private val settingsPage by lazy {
         SettingsPage(this, prefs,
-            onTabsChanged = { render(scrollY = body?.scrollY ?: 0) },
+            onTabsChanged = ::refreshNavigation,
             openWeReadAccount = ::manageWeReadAccount,
             grayscale = grayscale,
             exportWallpaper = ::requestWallpaperExport,
@@ -160,6 +165,7 @@ class InkActivity : Activity() {
     private var shelfScroll = TileScroll()
     private var folderTrail = emptyList<FolderLocation>()
     private var folderContents: FolderContents = FolderContents.Loading
+    private var directoryOpenTimes = emptyMap<String, Long>()
     private var folderRequest = 0
     private var openFolderContents: FolderContents = FolderContents.Loading
     private var openFolderRequest = 0
@@ -235,7 +241,8 @@ class InkActivity : Activity() {
         val tab = savedInstanceState?.getInt("page", 0) ?: 0
         page = LauncherPage.entries.getOrElse(tab) { LauncherPage.HOME }.takeIf { it in visiblePages } ?: LauncherPage.HOME
         appsScroll = TileScroll(savedInstanceState?.getInt("apps_row") ?: 0, savedInstanceState?.getInt("apps_offset") ?: 0)
-        shelfScroll = TileScroll(savedInstanceState?.getInt("shelf_row") ?: 0, savedInstanceState?.getInt("shelf_offset") ?: 0)
+        shelfScroll = TileScroll(savedInstanceState?.getInt("shelf_row") ?: 0, savedInstanceState?.getInt("shelf_offset") ?: 0,
+            savedInstanceState?.getString("shelf_key"))
         if (page == LauncherPage.SETTINGS) savedInstanceState?.getString("update_apk")?.let {
             updateFlow.value.awaitingPermission = it
         }
@@ -313,6 +320,7 @@ class InkActivity : Activity() {
         outState.putInt("apps_offset", appsScroll.offset)
         outState.putInt("shelf_row", shelfScroll.row)
         outState.putInt("shelf_offset", shelfScroll.offset)
+        outState.putString("shelf_key", shelfScroll.key)
         if (updateFlow.isInitialized()) outState.putString("update_apk", updateFlow.value.awaitingPermission)
     }
 
@@ -397,7 +405,8 @@ class InkActivity : Activity() {
         }
         val root = column().apply { setBackgroundColor(Color.WHITE) }
         val panel = column().apply {
-            setPadding(dp(PAGE_INSET_DP), dp(PAGE_TOP_DP), dp(PAGE_INSET_DP), 0)
+            val top = if (page == LauncherPage.ABOUT) ABOUT_TOP_DP else PAGE_TOP_DP
+            setPadding(dp(PAGE_INSET_DP), dp(top), dp(PAGE_INSET_DP), 0)
         }
         root.addView(panel, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
         val withBooks = page == LauncherPage.SHELF || page == LauncherPage.HOME
@@ -416,7 +425,7 @@ class InkActivity : Activity() {
                 val pinnedKeys = pins.toSet()
                 val byKey = apps.associateBy { it.key }
                 val ordered = pins.mapNotNull(byKey::get) + apps.filterNot { it.key in pinnedKeys }
-                grid = content.showApps(ordered, pinnedKeys, appTileHeight(), tile = ::appTile)
+                grid = content.showApps(ordered, pinnedKeys, tile = ::appTile)
             }
             LauncherPage.SHELF -> {
                 shelfOrderDirty = false
@@ -439,9 +448,8 @@ class InkActivity : Activity() {
         body = view
         renderedPage = page
         panel.addView(view, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
-        root.addView(footer(pages), LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        attachNavigation(root, pages)
         setContentView(root)
-        renderedPages = pages
         if (page == LauncherPage.SHELF) {
             refreshVisibleShelfCovers()
         } else {
@@ -535,40 +543,43 @@ class InkActivity : Activity() {
                 if (request != recentLocalRequest || isDestroyed) return@runOnUiThread
                 val firstLoad = recentLocalBooks == null
                 recentLocalBooks = recent
-                if (page == LauncherPage.HOME && (firstLoad || renderedRecentBooks != homeBooks(opened))) render()
+                if (page == LauncherPage.HOME && (firstLoad || renderedRecentBooks != homeBooks(opened))) {
+                    render(scrollY = body?.scrollY ?: 0)
+                }
             }
         }
     }
-
-    private fun appTileHeight() = APP_TILE_HEIGHT + ((resources.configuration.fontScale - 1f).coerceAtLeast(0f) * 40).toInt()
 
     private fun appTile(item: AppEntry, pinned: Boolean) = column().apply {
         val name = displayLabel(item)
         contentDescription = if (pinned) "$name，已置顶" else name
         gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-        setPadding(dp(2), dp(10), dp(2), dp(4))
-        val iconSize = minOf(60, ((resources.configuration.screenWidthDp - 88) / APP_COLUMNS).coerceAtLeast(34))
+        setPadding(dp(2), 0, dp(2), 0)
+        val tileWidth = (resources.configuration.screenWidthDp - 2 * PAGE_INSET_DP -
+            (APP_COLUMNS - 1) * TILE_COLUMN_GAP_DP) / APP_COLUMNS
+        val iconSize = minOf(APP_ICON_DP, (tileWidth - 2 * (APP_PIN_DP + 4)).coerceAtLeast(1))
         val icon = catalog.icon(item)?.let { original ->
             ImageView(this@InkActivity).apply {
                 setImageDrawable(original)
                 colorFilter = grayscale
                 scaleType = ImageView.ScaleType.FIT_CENTER
-                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             }
-        } ?: InkGlyph(this@InkActivity, InkGlyph.Kind.APP, sizeDp = 35)
-        if (pinned) {
-            addView(FrameLayout(this@InkActivity).apply {
-                addView(icon, FrameLayout.LayoutParams(dp(iconSize), dp(iconSize), Gravity.CENTER))
-                addView(InkGlyph(this@InkActivity, InkGlyph.Kind.PIN, sizeDp = 12).apply {
-                    background = paperShape(LINE)
+        } ?: InkGlyph(this@InkActivity, InkGlyph.Kind.APP, sizeDp = minOf(36, iconSize))
+        icon.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        addView(FrameLayout(this@InkActivity).apply {
+            addView(icon, FrameLayout.LayoutParams(dp(iconSize), dp(iconSize), Gravity.CENTER))
+            if (pinned) {
+                addView(InkGlyph(this@InkActivity, InkGlyph.Kind.PIN, sizeDp = APP_PIN_DP).apply {
                     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-                }, FrameLayout.LayoutParams(dp(18), dp(18), Gravity.TOP or Gravity.END))
-            }, LinearLayout.LayoutParams(dp(iconSize + 16), dp(iconSize)))
-        } else addView(icon, LinearLayout.LayoutParams(dp(iconSize), dp(iconSize)))
+                }, FrameLayout.LayoutParams(dp(APP_PIN_DP), dp(APP_PIN_DP), Gravity.TOP or Gravity.END).apply {
+                    marginEnd = dp(((tileWidth - iconSize) / 2 - APP_PIN_DP - 4).coerceAtLeast(0))
+                })
+            }
+        }, LinearLayout.LayoutParams(MATCH_PARENT, dp(iconSize)))
         gap(6)
-        addView(label(name, LABEL_TEXT_SP).apply {
-            gravity = Gravity.CENTER
-            maxLines = 2
+        addView(label(name, ACTION_TEXT_SP).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            setLines(2)
             ellipsize = TextUtils.TruncateAt.END
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
@@ -583,6 +594,7 @@ class InkActivity : Activity() {
             renderedShelfSources = sources
             if (!sources.local) {
                 folderContents = FolderContents.Loading
+                directoryOpenTimes = emptyMap()
                 folderRequest++
             }
         }
@@ -594,7 +606,7 @@ class InkActivity : Activity() {
         val entries = buildList {
             (local as? FolderContents.Items)?.entries?.forEach { add(ShelfEntry.Local(it)) }
             cloudShelf?.root.orEmpty().forEach { add(ShelfEntry.Online(it)) }
-        }.orderedOnShelf(sort, opened, onlineOpened, hidden)
+        }.orderedOnShelf(sort, opened, onlineOpened, hidden, directories = directoryOpenTimes)
         val message = if (entries.isEmpty()) when {
             !sources.local && !sources.weRead -> "未开启书架来源"
             local == FolderContents.Loading -> "正在读取书架…"
@@ -608,7 +620,8 @@ class InkActivity : Activity() {
     private fun LinearLayout.showShelfGrid(
         model: ShelfPageModel, sort: ShelfSort, onlineOpened: Map<String, Long>, hidden: HiddenBooks,
     ): ListView? = showShelf(model, ::backFromShelfFolder, ::requestBooksPermission) { entry, covers ->
-        shelfTile(entry, covers.local, covers.online, sort, onlineOpened, hiddenOnHome = entry in hidden)
+        shelfTile(entry, covers.local, covers.online, sort, onlineOpened,
+            hiddenOnHome = entry in hidden, rootShelf = model.folderName == null)
     }
 
     private fun openShelfGroup(group: String) {
@@ -641,8 +654,6 @@ class InkActivity : Activity() {
 
     private fun openFolderItem(item: FolderItem) {
         if (item.isDirectory) {
-            prefs.recordFolderOpen(item.location)
-            shelfOrderDirty = true
             navigateFolder(folderTrail + item.location)
             return
         }
@@ -661,7 +672,7 @@ class InkActivity : Activity() {
                     toast("未找到支持续读链接的多看阅读器")
                     return@runOnUiThread
                 }
-                prefs.recordFolderOpen(item.location)
+                prefs.recordBookOpen(item.location)
                 File(item.location.id).parent?.let { id -> mosaicRevisions[id] = (mosaicRevisions[id] ?: 0) + 1 }
                 shelfOrderDirty = true
             }
@@ -670,23 +681,26 @@ class InkActivity : Activity() {
 
     private fun shelfTile(
         entry: ShelfEntry, localCovers: MutableList<ShelfCovers.Target>, onlineCovers: MutableList<WeReadCovers.Target>,
-        sort: ShelfSort, onlineOpened: Map<String, Long>, hiddenOnHome: Boolean = false,
-    ): View = coverTile(entry.displayTitle, entry.directory, online = entry is ShelfEntry.Online, hiddenOnHome = hiddenOnHome, bind = { cover ->
+        sort: ShelfSort, onlineOpened: Map<String, Long>, hiddenOnHome: Boolean = false, rootShelf: Boolean = false,
+    ): View = coverTile(entry.displayTitle, entry.directory, online = entry is ShelfEntry.Online, hiddenOnHome = hiddenOnHome,
+        rootShelf = rootShelf, bind = { cover ->
         when {
             !entry.directory -> bindBookCover(entry, cover, localCovers, onlineCovers)
             entry is ShelfEntry.Local -> localCovers.add(ShelfCovers.Target.Directory(entry.item.location) { faces ->
-                if (faces.isEmpty()) cover.showCoverTitle(entry.displayTitle) else cover.showCoverMosaic(faces)
+                if (faces.isNotEmpty()) cover.showCoverMosaic(faces, markFolder = rootShelf)
+                else if (rootShelf) cover.showShelfPlaceholder(InkGlyph.Kind.FILE)
+                else cover.showCoverTitle(entry.displayTitle)
             })
             entry is ShelfEntry.Online -> {
                 val group = entry.entry as WeReadEntry.Group
                 val books = group.books.map(ShelfEntry::Online).orderedOnShelf(sort, emptyMap(), onlineOpened).take(4)
                     .map { it.entry as WeReadEntry.Book }
                 val faces = books.map { ShelfCovers.Face(it.name, null) }.toMutableList()
-                if (faces.isNotEmpty()) cover.showCoverMosaic(faces, fileNames = false)
+                if (faces.isNotEmpty()) cover.showCoverMosaic(faces, fileNames = false, markFolder = rootShelf)
                 for ((index, book) in books.withIndex()) {
                     onlineCovers.add(WeReadCovers.Target(book) { bitmap ->
                         faces[index] = ShelfCovers.Face(book.name, bitmap)
-                        cover.showCoverMosaic(faces, fileNames = false)
+                        cover.showCoverMosaic(faces, fileNames = false, markFolder = rootShelf)
                     })
                 }
             }
@@ -752,7 +766,7 @@ class InkActivity : Activity() {
     }
 
     private fun coverTile(
-        name: String, directory: Boolean, online: Boolean = false, hiddenOnHome: Boolean = false,
+        name: String, directory: Boolean, online: Boolean, hiddenOnHome: Boolean, rootShelf: Boolean,
         bind: (FrameLayout) -> Unit, open: () -> Unit,
     ) = column().apply {
         contentDescription = buildString {
@@ -761,7 +775,10 @@ class InkActivity : Activity() {
             if (online) append("，微信读书")
             if (hiddenOnHome) append("，已在首页隐藏")
         }
-        val artwork = FrameLayout(this@InkActivity).apply { showCoverTitle(name) }
+        val artwork = FrameLayout(this@InkActivity).apply {
+            if (rootShelf) showShelfPlaceholder(if (directory) InkGlyph.Kind.FILE else InkGlyph.Kind.BOOK)
+            else showCoverTitle(name)
+        }
         val cover = CoverFrame().apply {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
             addView(artwork, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
@@ -775,15 +792,18 @@ class InkActivity : Activity() {
         }
         bind(artwork)
         addView(cover, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        gap(5)
+        gap(if (rootShelf) 7 else 5)
         addView(horizontal().apply {
             gravity = Gravity.TOP
-            if (directory) {
+            if (directory && !rootShelf) {
                 addView(InkGlyph(this@InkActivity, InkGlyph.Kind.FILE, sizeDp = 16, tone = SOFT_INK),
                     LinearLayout.LayoutParams(dp(17), dp(20)).apply { marginEnd = dp(4) })
             }
             addView(label(name, LABEL_TEXT_SP, face = if (directory) Typeface.DEFAULT_BOLD else Typeface.DEFAULT).apply {
-                maxLines = 2
+                if (rootShelf) {
+                    gravity = Gravity.TOP or Gravity.START
+                    setLines(2)
+                } else maxLines = 2
                 ellipsize = TextUtils.TruncateAt.END
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
@@ -832,7 +852,13 @@ class InkActivity : Activity() {
         }, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
     }
 
-    private fun FrameLayout.showCoverMosaic(faces: List<ShelfCovers.Face>, fileNames: Boolean = true) {
+    private fun FrameLayout.showShelfPlaceholder(glyph: InkGlyph.Kind) {
+        removeAllViews()
+        setBackgroundColor(PRESS_FILL)
+        addView(InkGlyph(context, glyph, sizeDp = 30, tone = SOFT_INK), FrameLayout.LayoutParams(dp(38), dp(38), Gravity.CENTER))
+    }
+
+    private fun FrameLayout.showCoverMosaic(faces: List<ShelfCovers.Face>, fileNames: Boolean = true, markFolder: Boolean = false) {
         removeAllViews()
         setBackgroundColor(0xFFE6E6E6.toInt())
         addView(column().apply {
@@ -849,6 +875,11 @@ class InkActivity : Activity() {
                 }, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
             }
         }, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        if (markFolder) {
+            addView(InkGlyph(context, InkGlyph.Kind.FILE, sizeDp = 16).apply {
+                setBackgroundColor(Color.WHITE)
+            }, FrameLayout.LayoutParams(dp(28), dp(24), Gravity.TOP or Gravity.START))
+        }
     }
 
     private fun navigateFolder(trail: List<FolderLocation>) {
@@ -884,7 +915,7 @@ class InkActivity : Activity() {
         val entries = buildList {
             (local as? FolderContents.Items)?.entries?.forEach { add(ShelfEntry.Local(it)) }
             group?.books.orEmpty().forEach { add(ShelfEntry.Online(it)) }
-        }.orderedOnShelf(sort, opened, onlineOpened, hidden)
+        }.orderedOnShelf(sort, opened, onlineOpened, hidden, directories = directoryOpenTimes)
         val message = if (entries.isEmpty()) when (local) {
             FolderContents.Loading -> "正在读取书架…"
             FolderContents.PermissionRequired -> null
@@ -892,8 +923,9 @@ class InkActivity : Activity() {
             else -> if (group != null) "这个文件夹没有书籍" else "这个目录没有书籍"
         } else null
         val label = if (folderTrail.size > 1) "返回上一级" else "返回书架"
+        val parentPath = if (folderTrail.size > 1) folderTrail.dropLast(1).joinToString(" / ") { it.name } else null
         val panel = paperDialogPanel(maxHeight = dp(resources.configuration.screenHeightDp * 3 / 4))
-        val list = panel.showShelfGrid(ShelfPageModel(name, label, local == FolderContents.PermissionRequired, message, entries),
+        val list = panel.showShelfGrid(ShelfPageModel(name, label, local == FolderContents.PermissionRequired, message, entries, parentPath),
             sort, onlineOpened, hidden)
         folderViewport = list?.let {
             panel.addView(it, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
@@ -941,11 +973,17 @@ class InkActivity : Activity() {
     private fun reloadFolder() {
         if (!prefs.shelfSources.local) return
         val request = ++folderRequest
-        readFolder(null) {
-            if (request == folderRequest && prefs.shelfSources.local && it != folderContents) {
-                folderContents = it
-                if (page == LauncherPage.SHELF) {
-                    if (folderDialog == null) render() else shelfOrderDirty = true
+        readFolder(null) { contents, directoryTimes ->
+            if (request != folderRequest || !prefs.shelfSources.local) return@readFolder
+            val orderChanged = directoryTimes != directoryOpenTimes
+            if (contents == folderContents && !orderChanged) return@readFolder
+            folderContents = contents
+            directoryOpenTimes = directoryTimes
+            if (page == LauncherPage.SHELF) {
+                if (folderDialog == null) render() else {
+                    shelfOrderDirty = true
+                    if (orderChanged && folderTrail.isNotEmpty() && openFolderContents is FolderContents.Items &&
+                        folderDialog?.isShowing == true) renderShelfFolder()
                 }
             }
         }
@@ -954,27 +992,30 @@ class InkActivity : Activity() {
     private fun reloadOpenFolder() {
         val location = folderTrail.lastOrNull() ?: return
         val request = ++openFolderRequest
-        readFolder(location) {
-            if (request == openFolderRequest && folderDialog != null && it != openFolderContents) {
-                openFolderContents = it
+        readFolder(location) { contents, _ ->
+            if (request == openFolderRequest && folderDialog?.isShowing == true && contents != openFolderContents) {
+                openFolderContents = contents
                 renderShelfFolder()
             }
         }
     }
 
-    private fun readFolder(location: FolderLocation?, deliver: (FolderContents) -> Unit) {
+    private fun readFolder(location: FolderLocation?, deliver: (FolderContents, Map<String, Long>) -> Unit) {
         val gate = when {
             Build.VERSION.SDK_INT > 28 -> FolderContents.Unsupported
             !hasBooksPermission() -> FolderContents.PermissionRequired
             else -> null
         }
         if (gate != null) {
-            deliver(gate)
+            deliver(gate, emptyMap())
             return
         }
         folderWorker.execute {
             val result = FolderAccess.contents(location)
-            runOnUiThread { if (!isDestroyed) deliver(result) }
+            val directoryTimes = if (location == null && result is FolderContents.Items) {
+                FolderAccess.directoryOpenTimes(prefs.folderOpenTimes())
+            } else emptyMap()
+            runOnUiThread { if (!isDestroyed) deliver(result, directoryTimes) }
         }
     }
 
@@ -1313,6 +1354,18 @@ class InkActivity : Activity() {
         dialog.setOnDismissListener { if (editDialog === dialog) editDialog = null }
     }
 
+    private fun refreshNavigation() {
+        val root = navigation.parent as LinearLayout
+        root.removeView(navigation)
+        attachNavigation(root, visiblePages)
+    }
+
+    private fun attachNavigation(root: LinearLayout, pages: List<LauncherPage>) {
+        navigation = footer(pages)
+        root.addView(navigation, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        renderedPages = pages
+    }
+
     private fun footer(pages: List<LauncherPage>) = column().apply {
         setPadding(dp(PAGE_INSET_DP), 0, dp(PAGE_INSET_DP), dp(4))
         rule(INK)
@@ -1323,10 +1376,12 @@ class InkActivity : Activity() {
             val cell = column().apply {
                 contentDescription = destination
                 isSelected = selected
+                buttonRole()
                 action { show(item) }
                 addView(View(this@InkActivity).apply {
-                    setBackgroundColor(if (selected) INK else Color.WHITE)
-                }, LinearLayout.LayoutParams(MATCH_PARENT, dp(2)))
+                    setBackgroundColor(if (selected) INK else Color.TRANSPARENT)
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                }, LinearLayout.LayoutParams(dp(20), dp(2)).apply { gravity = Gravity.CENTER_HORIZONTAL })
                 addView(label(destination, LABEL_TEXT_SP, face = if (selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT).apply {
                     gravity = Gravity.CENTER
                     maxLines = 1

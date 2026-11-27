@@ -21,8 +21,8 @@ internal sealed interface ShelfEntry {
         override val directory get() = entry is WeReadEntry.Group
     }
 
-    fun openedAt(local: Map<String, Long>, online: Map<String, Long>): Long = when (this) {
-        is Local -> local[id] ?: 0L
+    fun openedAt(local: Map<String, Long>, online: Map<String, Long>, directories: Map<String, Long> = emptyMap()): Long = when (this) {
+        is Local -> (if (directory) directories else local)[id] ?: 0L
         is Online -> when (val value = entry) {
             is WeReadEntry.Book -> value.openedAt(online)
             is WeReadEntry.Group -> value.books.maxOfOrNull { it.openedAt(online) } ?: 0L
@@ -48,10 +48,11 @@ private fun WeReadEntry.Book.openedAt(opened: Map<String, Long>): Long {
 
 internal fun <T : ShelfEntry> List<T>.orderedOnShelf(
     sort: ShelfSort, local: Map<String, Long>, online: Map<String, Long>, hidden: HiddenBooks? = null,
+    directories: Map<String, Long> = emptyMap(),
 ): List<T> {
     val byName = compareBy<T, String>(Collator.getInstance()) { it.name }
         .thenBy { it.name }.thenBy { it.id }
-    val ordered = if (sort == ShelfSort.NAME) sortedWith(byName) else map { it to it.openedAt(local, online) }
+    val ordered = if (sort == ShelfSort.NAME) sortedWith(byName) else map { it to it.openedAt(local, online, directories) }
         .sortedWith(compareByDescending<Pair<T, Long>> { it.second }.then { a, b ->
             byName.compare(a.first, b.first)
         }).map { it.first }

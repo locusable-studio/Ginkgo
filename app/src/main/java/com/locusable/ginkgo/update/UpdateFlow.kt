@@ -23,24 +23,32 @@ internal class UpdateFlow(private val activity: Activity) {
     private var dialog: Dialog? = null
     var awaitingPermission: String? = null
 
+    private data class CheckedRelease(val release: ReleaseUpdate, val isNewer: Boolean, val cachedApk: File?)
+
     fun check() = task("正在检查更新", "正在读取 GitHub 上的正式发布。", "无法检查更新", "请检查网络连接后重试。", work = {
-        client.latest()?.let { it to client.installedCode() }
+        client.latest()?.let { release ->
+            val isNewer = release.versionCode > client.installedCode()
+            CheckedRelease(release, isNewer, if (isNewer) client.verifiedCachedApk(release) else null)
+        }
     }) { result ->
         when {
             result == null -> message("暂时无法检查更新", "当前正式发布尚未提供应用内更新信息。")
-            result.first.versionCode <= result.second -> message("已是最新版本", "当前没有可用的正式更新。")
-            else -> offer(result.first)
+            !result.isNewer -> message("已是最新版本", "当前没有可用的正式更新。")
+            else -> offer(result.release, result.cachedApk)
         }
     }
 
-    private fun offer(release: ReleaseUpdate) {
+    private fun offer(release: ReleaseUpdate, cachedApk: File?) {
         val notes = release.notes.lineSequence().map { it.trimEnd() }
             .filterNot { it.startsWith("# ") || it.startsWith("## ") }
             .joinToString("\n") { if (it.startsWith("- ")) "• ${it.removePrefix("- ")}" else it }
             .replace("**", "").trim()
         val version = "${release.versionName} (${release.versionCode})"
         val description = if (notes.isBlank()) version else "$version\n\n$notes"
-        dialog = activity.showPaperDialog("发现新版本", description, "下载更新") { download(release) }
+        val action = if (cachedApk == null) "下载更新" else "安装更新"
+        dialog = activity.showPaperDialog("发现新版本", description, action) {
+            if (cachedApk == null) download(release) else requestInstall(cachedApk)
+        }
     }
 
     private fun download(release: ReleaseUpdate) {
@@ -59,6 +67,10 @@ internal class UpdateFlow(private val activity: Activity) {
     }
 
     private fun requestInstall(apk: File) {
+        if (!apk.isFile) {
+            message("无法安装更新", "下载的 APK 已不可用，请重新检查更新。")
+            return
+        }
         if (activity.packageManager.canRequestPackageInstalls()) {
             install(apk)
             return

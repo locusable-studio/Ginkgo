@@ -48,14 +48,14 @@ internal class InkPreferences(context: Context) {
         }
 
     var showAboutTab: Boolean
-        get() = prefs.getBoolean("show_about_tab", true)
+        get() = prefs.getBoolean("show_about_tab", false)
         set(value) { prefs.edit().putBoolean("show_about_tab", value).apply() }
 
     fun folderOpenTimes(): Map<String, Long> = folderOpens.all.mapNotNull { (id, time) ->
         (time as? Long)?.let { id to it }
     }.toMap()
 
-    fun recordFolderOpen(location: FolderLocation) {
+    fun recordBookOpen(location: FolderLocation) {
         folderOpens.edit().putLong(location.id, System.currentTimeMillis()).apply()
     }
 

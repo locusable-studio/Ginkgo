@@ -90,18 +90,20 @@ internal fun <T : Any> LinearLayout.tileRows(
     val rowSize = rowHeight?.let(context::dp) ?: WRAP_CONTENT
     items.chunked(columns).forEach { group ->
         if (rowGap > 0) gap(rowGap)
-        addView(context.horizontal().apply { addTileCells(group, columns, rowHeight != null, tile) },
+        addView(context.horizontal().apply { addTileCells(group, columns, rowHeight != null, tile = tile) },
             LinearLayout.LayoutParams(MATCH_PARENT, rowSize))
     }
 }
 
-internal fun <T : Any> LinearLayout.addTileCells(items: List<T>, columns: Int, fixedHeight: Boolean, tile: (T) -> View) {
+internal fun <T : Any> LinearLayout.addTileCells(
+    items: List<T>, columns: Int, fixedHeight: Boolean, columnGapDp: Int = TILE_COLUMN_GAP_DP, tile: (T) -> View,
+) {
     gravity = Gravity.TOP
     repeat(columns) { index ->
         val child = items.getOrNull(index)?.let(tile)
         val height = if (child == null) 0 else if (fixedHeight) MATCH_PARENT else WRAP_CONTENT
         addView(child ?: View(context), LinearLayout.LayoutParams(0, height, 1f).apply {
-            if (index > 0) marginStart = context.dp(TILE_COLUMN_GAP_DP)
+            if (index > 0) marginStart = context.dp(columnGapDp)
         })
     }
 }
@@ -116,10 +118,16 @@ internal fun Context.paperTileList() = ListView(this).apply {
 }
 
 internal fun <T : Any> ListView.showTileRows(
-    items: List<T>, columns: Int, rowHeight: Int? = null, bind: (LinearLayout, List<T>) -> Unit,
+    items: List<T>, columns: Int, anchorKey: ((T) -> String)? = null,
+    bind: (LinearLayout, List<T>) -> Unit,
 ) {
     val rowGap = context.dp(TILE_ROW_GAP)
-    val height = rowHeight?.let { context.dp(it) + rowGap } ?: WRAP_CONTENT
+    tag = anchorKey?.let { keyFor ->
+        TileAnchorLookup { key ->
+            val index = items.indexOfFirst { keyFor(it) == key }
+            if (index < 0) null else headerViewsCount + index / columns
+        }
+    }
     setRecyclerListener { (it as? TileListRow)?.reset() }
     adapter = object : BaseAdapter() {
         override fun getCount() = (items.size + columns - 1) / columns
@@ -127,12 +135,14 @@ internal fun <T : Any> ListView.showTileRows(
         override fun getItemId(position: Int) = position.toLong()
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
             val row = convertView as? TileListRow ?: TileListRow(context).apply {
-                layoutParams = AbsListView.LayoutParams(MATCH_PARENT, height)
+                layoutParams = AbsListView.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
                 setPadding(0, 0, 0, rowGap)
             }
             if (row.position != position) {
+                val entries = getItem(position)
                 row.reset()
-                bind(row, getItem(position))
+                bind(row, entries)
+                row.anchorKey = anchorKey?.invoke(entries.first())
                 row.position = position
             }
             return row
@@ -140,33 +150,38 @@ internal fun <T : Any> ListView.showTileRows(
     }
 }
 
+private class TileAnchorLookup(val rowFor: (String) -> Int?)
+
 private class TileListRow(context: Context) : LinearLayout(context) {
     var position = -1
+    var anchorKey: String? = null
 
     init { setBaselineAligned(false) }
 
     fun reset() {
         position = -1
+        anchorKey = null
         tag = null
         removeAllViews()
     }
 }
 
-internal data class TileScroll(val row: Int = 0, val offset: Int = 0)
+internal data class TileScroll(val row: Int = 0, val offset: Int = 0, val key: String? = null)
 
 internal fun ListView.tileScroll(): TileScroll? = getChildAt(0)?.let {
-    TileScroll(firstVisiblePosition, it.top - listPaddingTop)
+    TileScroll(firstVisiblePosition, it.top - listPaddingTop, (it as? TileListRow)?.anchorKey)
 }
 
 internal fun ListView.restoreTileScroll(position: TileScroll) {
-    if (count > 0 && (position.row != 0 || position.offset != 0)) {
-        setSelectionFromTop(position.row.coerceIn(0, count - 1), position.offset)
+    val row = position.key?.let { (tag as? TileAnchorLookup)?.rowFor?.invoke(it) } ?: position.row
+    if (count > 0 && (row != 0 || position.offset != 0)) {
+        setSelectionFromTop(row.coerceIn(0, count - 1), position.offset)
     }
 }
 
 internal fun LinearLayout.notice(message: String) {
     addView(context.label(message, ACTION_TEXT_SP, tone = SOFT_INK).apply {
-        setPadding(0, context.dp(HEADING_GAP_DP), 0, context.dp(HEADING_GAP_DP))
+        setPadding(0, 0, 0, context.dp(HEADING_GAP_DP))
     }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
 }
 

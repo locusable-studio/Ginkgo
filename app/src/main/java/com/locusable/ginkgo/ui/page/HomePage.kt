@@ -26,7 +26,6 @@ import com.locusable.ginkgo.ui.label
 import com.locusable.ginkgo.ui.notice
 import com.locusable.ginkgo.ui.section
 import com.locusable.ginkgo.ui.tileRows
-import com.locusable.ginkgo.ui.title
 
 private const val HOME_COLUMNS = 4
 internal const val HOME_RECENT_BOOK_LIMIT = 4
@@ -47,10 +46,16 @@ internal fun LinearLayout.showHome(
         ellipsize = TextUtils.TruncateAt.END
         maxWidth = context.dp((resources.configuration.screenWidthDp - 2 * PAGE_INSET_DP) / 2)
     }
-    title(context.getString(R.string.app_name), accessory = credit)
+    addView(context.horizontal().apply {
+        addView(context.label(context.getString(R.string.app_name), 18f, face = Typeface.DEFAULT_BOLD).apply {
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        addView(credit, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = context.dp(8) })
+    }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
     val featured = recentBooks.firstOrNull()
     if (featured != null) {
-        gap(PAGE_INSET_DP)
+        gap(12)
         section("继续阅读", "")
         addView(context.resumeRow(featured, featuredCover(featured), { display -> bindAuthor(featured, display) }) { openBook(featured) },
             LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
@@ -61,8 +66,8 @@ internal fun LinearLayout.showHome(
             tileRows(otherBooks, HOME_COLUMNS, rowGap = HOME_TILE_GAP_DP, tile = recentBookTile)
         }
     } else if (booksReady) {
-        gap(PAGE_INSET_DP)
-        notice("打开一本书后，可以在这里继续阅读。")
+        gap(12)
+        notice("在书架打开一本书，下次就能在这里继续阅读。")
     }
 }
 
@@ -76,11 +81,11 @@ private fun Context.resumeRow(book: ShelfEntry, cover: View, bindAuthor: ((Strin
     }
     showAuthor(author.text.toString())
     bindAuthor(::showAuthor)
-    setPaddingRelative(0, dp(8), dp(2), dp(8))
+    setPaddingRelative(0, dp(4), dp(2), dp(4))
     addView(cover, LinearLayout.LayoutParams(dp(54), WRAP_CONTENT))
     addView(column().apply {
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
-        addView(label(title, 20f, face = Typeface.DEFAULT_BOLD).apply {
+        addView(label(title, 21f, face = Typeface.DEFAULT_BOLD).apply {
             maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
         }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
