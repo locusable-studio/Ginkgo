@@ -3,17 +3,22 @@ package com.locusable.ginkgo.ui
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.view.accessibility.AccessibilityNodeInfo
-import android.widget.FrameLayout
+import android.widget.AbsListView
+import android.widget.BaseAdapter
 import android.widget.LinearLayout
+import android.widget.ListView
 import android.widget.TextView
 
 internal const val TILE_ROW_GAP = 12
+internal const val TILE_COLUMN_GAP_DP = 9
 
 internal fun Context.column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
@@ -76,20 +81,78 @@ internal fun <T : Any> LinearLayout.tileRows(
     items: List<T>, columns: Int, rowHeight: Int? = null, rowGap: Int = TILE_ROW_GAP, tile: (T) -> View,
 ) {
     val rowSize = rowHeight?.let(context::dp) ?: WRAP_CONTENT
-    val tileHeight = if (rowHeight == null) WRAP_CONTENT else MATCH_PARENT
     items.chunked(columns).forEach { group ->
         if (rowGap > 0) gap(rowGap)
-        addView(context.horizontal().apply {
-            gravity = Gravity.TOP
-            repeat(columns) { index ->
-                val child = group.getOrNull(index)?.let(tile)
-                // Blank cells reserve width without filling the remaining ScrollView height.
-                addView(child ?: View(context), LinearLayout.LayoutParams(0, if (child == null) 0 else tileHeight, 1f).apply {
-                    if (index > 0) marginStart = context.dp(9)
-                })
-            }
-        }, LinearLayout.LayoutParams(MATCH_PARENT, rowSize))
+        addView(context.horizontal().apply { addTileCells(group, columns, rowHeight != null, tile) },
+            LinearLayout.LayoutParams(MATCH_PARENT, rowSize))
     }
+}
+
+internal fun <T : Any> LinearLayout.addTileCells(items: List<T>, columns: Int, fixedHeight: Boolean, tile: (T) -> View) {
+    gravity = Gravity.TOP
+    repeat(columns) { index ->
+        val child = items.getOrNull(index)?.let(tile)
+        val height = if (child == null) 0 else if (fixedHeight) MATCH_PARENT else WRAP_CONTENT
+        addView(child ?: View(context), LinearLayout.LayoutParams(0, height, 1f).apply {
+            if (index > 0) marginStart = context.dp(TILE_COLUMN_GAP_DP)
+        })
+    }
+}
+
+internal fun Context.paperTileList() = ListView(this).apply {
+    divider = null
+    setSelector(ColorDrawable(Color.TRANSPARENT))
+    isVerticalScrollBarEnabled = false
+    overScrollMode = View.OVER_SCROLL_NEVER
+    clipToPadding = false
+    setItemsCanFocus(true)
+}
+
+internal fun <T : Any> ListView.showTileRows(
+    items: List<T>, columns: Int, rowHeight: Int? = null, bind: (LinearLayout, List<T>) -> Unit,
+) {
+    val rowGap = context.dp(TILE_ROW_GAP)
+    val height = rowHeight?.let { context.dp(it) + rowGap } ?: WRAP_CONTENT
+    setRecyclerListener { (it as? TileListRow)?.reset() }
+    adapter = object : BaseAdapter() {
+        override fun getCount() = (items.size + columns - 1) / columns
+        override fun getItem(position: Int) = items.subList(position * columns, minOf((position + 1) * columns, items.size))
+        override fun getItemId(position: Int) = position.toLong()
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val row = convertView as? TileListRow ?: TileListRow(context).apply {
+                layoutParams = AbsListView.LayoutParams(MATCH_PARENT, height)
+                setPadding(0, rowGap, 0, 0)
+            }
+            if (row.position != position) {
+                row.reset()
+                bind(row, getItem(position))
+                row.position = position
+            }
+            return row
+        }
+    }
+}
+
+private class TileListRow(context: Context) : LinearLayout(context) {
+    var position = -1
+
+    init { setBaselineAligned(false) }
+
+    fun reset() {
+        position = -1
+        tag = null
+        removeAllViews()
+    }
+}
+
+internal data class TileScroll(val row: Int = 0, val offset: Int = 0)
+
+internal fun ListView.tileScroll(): TileScroll? = getChildAt(0)?.let {
+    TileScroll(firstVisiblePosition, it.top - paddingTop)
+}
+
+internal fun ListView.restoreTileScroll(position: TileScroll) {
+    if (count > 0) setSelectionFromTop(position.row.coerceIn(0, count - 1), position.offset)
 }
 
 internal fun LinearLayout.notice(message: String) {
@@ -97,36 +160,6 @@ internal fun LinearLayout.notice(message: String) {
         setPadding(0, context.dp(HEADING_GAP_DP), 0, context.dp(HEADING_GAP_DP))
     }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
 }
-
-internal fun FrameLayout.updatePager(index: Int, total: Int, move: (Int) -> Unit) {
-    removeAllViews()
-    addView(context.horizontal().apply {
-        gravity = Gravity.CENTER
-        addView(context.pageButton("上一页", index > 0) { move(-1) }, LinearLayout.LayoutParams(WRAP_CONTENT, MATCH_PARENT))
-        addView(context.label("${index + 1} / $total", PAGER_TEXT_SP, tone = SOFT_INK).apply {
-            gravity = Gravity.CENTER
-            minimumWidth = context.dp(56)
-            setPaddingRelative(context.dp(8), 0, context.dp(8), 0)
-            maxLines = 1
-            fontFeatureSettings = "'tnum'"
-            contentDescription = "第 ${index + 1} 页，共 $total 页"
-        }, LinearLayout.LayoutParams(WRAP_CONTENT, MATCH_PARENT))
-        addView(context.pageButton("下一页", index + 1 < total) { move(1) }, LinearLayout.LayoutParams(WRAP_CONTENT, MATCH_PARENT))
-    }, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-}
-
-private const val PAGER_TEXT_SP = 13f
-
-private fun Context.pageButton(text: String, enabled: Boolean, click: () -> Unit) =
-    label(text, LABEL_TEXT_SP, tone = if (enabled) INK else DISABLED_INK).apply {
-        gravity = Gravity.CENTER
-        minimumWidth = dp(80)
-        maxLines = 1
-        isEnabled = enabled
-        if (enabled) action(click = click)
-        setPaddingRelative(dp(12), 0, dp(12), 0)
-        buttonRole()
-    }
 
 internal fun View.buttonRole(longAction: String? = null) {
     accessibilityDelegate = object : View.AccessibilityDelegate() {

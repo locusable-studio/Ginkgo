@@ -34,6 +34,8 @@ internal object ShelfWallpaper {
     private const val ANGLE = 15f
     private const val DIRECTORY = "Wallpaper"
     private const val MAX_PIXELS = 8_000_000L
+    val saveDirectory: String
+        get() = if (Build.VERSION.SDK_INT < 29) DIRECTORY else "${Environment.DIRECTORY_PICTURES}/$DIRECTORY"
 
     data class Layout(val width: Int, val height: Int, val slots: List<RectF>, val coverEdge: Int)
 
@@ -122,26 +124,25 @@ internal object ShelfWallpaper {
     }
 
     @Suppress("DEPRECATION") // The target reader supports a top-level Wallpaper directory.
-    fun save(context: Context, bitmap: Bitmap): String {
+    fun save(context: Context, bitmap: Bitmap) {
         val stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("uuuuMMdd-HHmmss", Locale.ROOT))
         val name = "Ginkgo-$stamp-${UUID.randomUUID().toString().take(8)}.png"
+        val destination = saveDirectory
         if (Build.VERSION.SDK_INT < 29) {
             val root = Environment.getExternalStorageDirectory().canonicalFile
-            val directory = File(root, DIRECTORY)
+            val directory = File(root, destination)
             if (directory.canonicalFile != directory) throw IOException("Invalid wallpaper directory")
             val saved = writeFile(directory, name, bitmap)
             runCatching { MediaScannerConnection.scanFile(context, arrayOf(saved.path), arrayOf("image/png"), null) }
-            return "$DIRECTORY/$name"
+            return
         }
-        // Scoped storage only allows image collections under approved media directories.
-        val directory = "${Environment.DIRECTORY_PICTURES}/$DIRECTORY"
         val resolver = context.contentResolver
         requireNotInterrupted()
         val images = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         val uri = resolver.insert(images, ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, name)
             put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-            put(MediaStore.Images.Media.RELATIVE_PATH, "$directory/")
+            put(MediaStore.Images.Media.RELATIVE_PATH, "$destination/")
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }) ?: throw IOException("Cannot create wallpaper")
         var saved = false
@@ -155,7 +156,6 @@ internal object ShelfWallpaper {
         } finally {
             if (!saved) resolver.delete(uri, null, null)
         }
-        return "$directory/$name"
     }
 
     internal fun writeFile(directory: File, name: String, bitmap: Bitmap): File {

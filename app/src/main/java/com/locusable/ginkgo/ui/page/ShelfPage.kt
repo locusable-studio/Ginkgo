@@ -5,9 +5,11 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ListView
 import com.locusable.ginkgo.shelf.ShelfEntry
+import com.locusable.ginkgo.shelf.cover.ShelfCovers
+import com.locusable.ginkgo.shelf.weread.WeReadCovers
 import com.locusable.ginkgo.ui.ACTION_HEIGHT_DP
 import com.locusable.ginkgo.ui.ACTION_TEXT_SP
 import com.locusable.ginkgo.ui.HEADING_GAP_DP
@@ -15,7 +17,9 @@ import com.locusable.ginkgo.ui.InkGlyph
 import com.locusable.ginkgo.ui.LABEL_TEXT_SP
 import com.locusable.ginkgo.ui.LINE
 import com.locusable.ginkgo.ui.SOFT_INK
+import com.locusable.ginkgo.ui.TILE_COLUMN_GAP_DP
 import com.locusable.ginkgo.ui.action
+import com.locusable.ginkgo.ui.addTileCells
 import com.locusable.ginkgo.ui.buttonRole
 import com.locusable.ginkgo.ui.column
 import com.locusable.ginkgo.ui.dp
@@ -24,12 +28,18 @@ import com.locusable.ginkgo.ui.horizontal
 import com.locusable.ginkgo.ui.label
 import com.locusable.ginkgo.ui.notice
 import com.locusable.ginkgo.ui.paperButton
-import com.locusable.ginkgo.ui.tileRows
+import com.locusable.ginkgo.ui.paperTileList
+import com.locusable.ginkgo.ui.showTileRows
 import com.locusable.ginkgo.ui.title
-import com.locusable.ginkgo.ui.updatePager
 
 private const val SHELF_COLUMNS = 4
-internal const val SHELF_PAGE_SIZE = SHELF_COLUMNS * 2
+private const val FOLDER_COLUMNS = 3
+
+internal fun LinearLayout.shelfFolderWidth(shelfWidth: Int): Int {
+    val gap = context.dp(TILE_COLUMN_GAP_DP)
+    val shelfTilesWidth = shelfWidth - (SHELF_COLUMNS - 1) * gap
+    return paddingLeft + paddingRight + shelfTilesWidth * FOLDER_COLUMNS / SHELF_COLUMNS + (FOLDER_COLUMNS - 1) * gap
+}
 
 internal data class ShelfPageModel(
     val folderName: String?,
@@ -37,32 +47,38 @@ internal data class ShelfPageModel(
     val permissionRequired: Boolean,
     val notice: String?,
     val entries: List<ShelfEntry>,
-    val index: Int,
-    val total: Int,
 )
+
+internal class ShelfRowCovers {
+    val local = mutableListOf<ShelfCovers.Target>()
+    val online = mutableListOf<WeReadCovers.Target>()
+}
 
 internal fun LinearLayout.showShelf(
     model: ShelfPageModel,
-    pager: FrameLayout,
     goBack: () -> Unit,
     requestBooksPermission: () -> Unit,
-    movePage: (Int) -> Unit,
-    tile: (ShelfEntry) -> View,
-) {
-    val permissionEmpty = model.permissionRequired && model.entries.isEmpty()
+    tile: (ShelfEntry, ShelfRowCovers) -> View,
+): ListView? {
     model.folderName?.let { name ->
         title(name, leading = model.backLabel?.let { context.shelfBackButton(it, goBack) })
     }
-    val paginated = !permissionEmpty && model.total > 1
-    pager.visibility = if (paginated) View.VISIBLE else View.GONE
-    if (permissionEmpty) {
-        showPermissionEmpty(requestBooksPermission)
-        return
+    if (model.entries.isEmpty()) {
+        if (model.permissionRequired) showPermissionEmpty(requestBooksPermission)
+        else model.notice?.let { notice(it) }
+        return null
     }
-    if (model.permissionRequired) showPermissionHint(requestBooksPermission)
-    model.notice?.let { notice(it) }
-    tileRows(model.entries, SHELF_COLUMNS, tile = tile)
-    if (paginated) pager.updatePager(model.index, model.total, movePage)
+    val columns = if (model.folderName == null) SHELF_COLUMNS else FOLDER_COLUMNS
+    return context.paperTileList().apply {
+        if (model.permissionRequired) {
+            addHeaderView(context.column().apply { showPermissionHint(requestBooksPermission) }, null, true)
+        }
+        showTileRows(model.entries, columns) { row, entries ->
+            val covers = ShelfRowCovers()
+            row.addTileCells(entries, columns, fixedHeight = false) { tile(it, covers) }
+            row.tag = covers
+        }
+    }
 }
 
 private fun LinearLayout.showPermissionEmpty(requestPermission: () -> Unit) {

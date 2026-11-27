@@ -2,12 +2,16 @@ package com.locusable.ginkgo.ui.page
 
 import android.content.Context
 import android.content.res.ColorStateList
+import android.graphics.ColorFilter
 import android.view.View
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.CheckBox
+import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import com.locusable.ginkgo.launcher.LauncherPage
 import com.locusable.ginkgo.settings.InkPreferences
+import com.locusable.ginkgo.shelf.weread.WeReadWeb
 import com.locusable.ginkgo.ui.ACTION_HEIGHT_DP
 import com.locusable.ginkgo.ui.DISABLED_INK
 import com.locusable.ginkgo.ui.INK
@@ -30,10 +34,13 @@ internal class SettingsPage(
     private val prefs: InkPreferences,
     private val onTabsChanged: () -> Unit,
     private val openWeReadAccount: () -> Unit,
+    private val grayscale: ColorFilter,
     private val exportWallpaper: () -> Unit,
     private val checkUpdate: () -> Unit,
 ) {
-    fun render(content: LinearLayout) = with(content) {
+    private val weReadAccountTag = Any()
+
+    fun render(content: LinearLayout, profile: WeReadWeb.Profile?) = with(content) {
         section("显示页面", "")
         gap(4)
         val config = resources.configuration
@@ -70,11 +77,34 @@ internal class SettingsPage(
         ), 2, rowGap = 0) { it }
         gap(SECTION_GAP_DP)
         section("账号", "")
-        folderRow("微信读书", InkGlyph.Kind.BOOK, InkGlyph.Kind.RIGHT, openWeReadAccount)
+        addView(FrameLayout(context).apply { tag = weReadAccountTag })
+        updateWeReadProfile(this, profile)
         gap(SECTION_GAP_DP)
         section("工具", "")
         folderRow("导出书架壁纸", InkGlyph.Kind.WALLPAPER, InkGlyph.Kind.ARROW, exportWallpaper)
         folderRow("检查更新", InkGlyph.Kind.REFRESH, InkGlyph.Kind.RIGHT, checkUpdate)
+    }
+
+    fun updateWeReadProfile(root: View, profile: WeReadWeb.Profile?) {
+        val slot = root.findViewWithTag<FrameLayout>(weReadAccountTag) ?: return
+        if (slot.getChildAt(0)?.let { it.tag === profile } == true) return
+        val focused = slot.hasFocus()
+        val icon = profile?.avatar?.let { avatar ->
+            ImageView(context).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                colorFilter = grayscale
+                setImageBitmap(avatar)
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }
+        } ?: InkGlyph(context, InkGlyph.Kind.BOOK)
+        val row = PaperRow(context, profile?.name ?: "微信读书", icon, InkGlyph.Kind.RIGHT).apply {
+            tag = profile
+            profile?.name?.let { contentDescription = "微信读书，$it" }
+            action(click = openWeReadAccount)
+        }
+        slot.removeAllViews()
+        slot.addView(row)
+        if (focused) row.requestFocus()
     }
 
     private fun visibilityOption(name: String, checked: Boolean, enabled: Boolean = true, onToggle: ((Boolean) -> Unit)? = null) = context.horizontal().apply {

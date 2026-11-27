@@ -21,14 +21,18 @@ import android.text.InputFilter
 import android.text.InputType
 import android.text.TextUtils
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
+import android.widget.AbsListView
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ListView
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -69,6 +73,7 @@ import com.locusable.ginkgo.ui.PAGE_TOP_DP
 import com.locusable.ginkgo.ui.ROW_TEXT_SP
 import com.locusable.ginkgo.ui.SECTION_GAP_DP
 import com.locusable.ginkgo.ui.SOFT_INK
+import com.locusable.ginkgo.ui.TileScroll
 import com.locusable.ginkgo.ui.action
 import com.locusable.ginkgo.ui.bookTitlePreview
 import com.locusable.ginkgo.ui.buttonRole
@@ -79,9 +84,10 @@ import com.locusable.ginkgo.ui.horizontal
 import com.locusable.ginkgo.ui.label
 import com.locusable.ginkgo.ui.page.APP_COLUMNS
 import com.locusable.ginkgo.ui.page.HOME_RECENT_BOOK_LIMIT
-import com.locusable.ginkgo.ui.page.SHELF_PAGE_SIZE
 import com.locusable.ginkgo.ui.page.SettingsPage
 import com.locusable.ginkgo.ui.page.ShelfPageModel
+import com.locusable.ginkgo.ui.page.ShelfRowCovers
+import com.locusable.ginkgo.ui.page.shelfFolderWidth
 import com.locusable.ginkgo.ui.page.showAbout
 import com.locusable.ginkgo.ui.page.showApps
 import com.locusable.ginkgo.ui.page.showHome
@@ -94,8 +100,10 @@ import com.locusable.ginkgo.ui.paperRule
 import com.locusable.ginkgo.ui.paperShape
 import com.locusable.ginkgo.ui.presentPaperDialog
 import com.locusable.ginkgo.ui.pressBackground
+import com.locusable.ginkgo.ui.restoreTileScroll
 import com.locusable.ginkgo.ui.rule
 import com.locusable.ginkgo.ui.showPaperDialog
+import com.locusable.ginkgo.ui.tileScroll
 import com.locusable.ginkgo.update.UpdateFlow
 import com.locusable.ginkgo.wallpaper.ShelfWallpaper
 import java.io.File
@@ -117,6 +125,7 @@ class InkActivity : Activity() {
         SettingsPage(this, prefs,
             onTabsChanged = { render(scrollY = body?.scrollY ?: 0) },
             openWeReadAccount = ::manageWeReadAccount,
+            grayscale = grayscale,
             exportWallpaper = ::requestWallpaperExport,
             checkUpdate = { updateFlow.value.check() },
         )
@@ -143,11 +152,18 @@ class InkActivity : Activity() {
     private var page = LauncherPage.HOME
     private var renderedPages = emptyList<LauncherPage>()
     private var renderedPins = emptyList<String>()
-    private var appPage = 0
-    private var shelfPage = 0
+    private var renderedPage = LauncherPage.HOME
+    private var appsScroll = TileScroll()
+    private var shelfScroll = TileScroll()
     private var folderTrail = emptyList<FolderLocation>()
     private var folderContents: FolderContents = FolderContents.Loading
     private var folderRequest = 0
+    private var openFolderContents: FolderContents = FolderContents.Loading
+    private var openFolderRequest = 0
+    private var folderDialog: Dialog? = null
+    private var folderViewport: ShelfViewport? = null
+    private var renderedFolderId: String? = null
+    private val folderScroll = mutableMapOf<String, TileScroll>()
     private val weRead by lazy { WeReadController.get(this) }
     private val weReadHistory by lazy { WeReadOpenHistory(applicationContext) }
     private val weReadCovers = lazy { WeReadCovers.get(applicationContext) }
@@ -158,6 +174,7 @@ class InkActivity : Activity() {
     private var loginDialog: Dialog? = null
     private var wallpaperDialog: Dialog? = null
     private var wallpaperJob: Future<*>? = null
+    private var wallpaperSaving = false
     private var wallpaperAwaitingCache = false
     private var resumeWallpaperExport = false
     private var resumed = false
@@ -175,10 +192,7 @@ class InkActivity : Activity() {
         val loading = weRead.state == WeReadController.State.LOADING
         val loaded = observedWeReadLoading && !loading
         observedWeReadLoading = loading
-        if (previous?.account != current.account && weReadGroup != null) {
-            weReadGroup = null
-            shelfPage = 0
-        }
+        if (previous?.account != current.account && weReadGroup != null) dismissShelfFolder(refreshRoot = false)
         if (page == LauncherPage.HOME) {
             if (previous?.account != current.account || renderedRecentBooks != homeBooks() ||
                 (loaded && renderedRecentBooks.isEmpty() && recentLocalBooks != null)) {
@@ -190,20 +204,28 @@ class InkActivity : Activity() {
             (previous?.shelf != current.shelf || previous?.session != current.session || (loaded && page == LauncherPage.SHELF))) {
             render(scrollY = body?.scrollY ?: 0)
         }
+        if (page == LauncherPage.SETTINGS) {
+            body?.let { settingsPage.updateWeReadProfile(it, weRead.profile) }
+            if (current.session != null && previous?.session?.account != current.session.account) weRead.loadProfile()
+        }
         loginDialog?.let(::updateWeReadLoginDialog)
     }
     private var pendingBook: FolderItem? = null
     private var shelfOrderDirty = false
     private val mosaicRevisions = mutableMapOf<String, Int>()
     private var editDialog: Dialog? = null
-    private var body: ScrollView? = null
+    private var body: View? = null
+    private data class ShelfViewport(val list: ListView, val opened: Map<String, Long>)
+    private var shelfViewport: ShelfViewport? = null
+    private var visibleShelfCovers: List<ShelfRowCovers>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced = false
         val tab = savedInstanceState?.getInt("page", 0) ?: 0
         page = LauncherPage.entries.getOrElse(tab) { LauncherPage.HOME }.takeIf { it in visiblePages } ?: LauncherPage.HOME
-        appPage = savedInstanceState?.getInt("app_page", 0) ?: 0
+        appsScroll = TileScroll(savedInstanceState?.getInt("apps_row") ?: 0, savedInstanceState?.getInt("apps_offset") ?: 0)
+        shelfScroll = TileScroll(savedInstanceState?.getInt("shelf_row") ?: 0, savedInstanceState?.getInt("shelf_offset") ?: 0)
         if (page == LauncherPage.SETTINGS) savedInstanceState?.getString("update_apk")?.let {
             updateFlow.value.awaitingPermission = it
         }
@@ -216,7 +238,8 @@ class InkActivity : Activity() {
         refresh()
         observeWeRead()
         // onPause cancels outstanding loads; resume them even if refresh kept the same views.
-        if (body === previousBody) bindOnlineCovers()
+        if (page == LauncherPage.SHELF) refreshVisibleShelfCovers()
+        else if (body === previousBody) bindOnlineCovers()
         if (page == LauncherPage.HOME) loadRecentLocalBooks()
         refreshShelf()
         if (resumeWallpaperExport) {
@@ -234,6 +257,7 @@ class InkActivity : Activity() {
         if (updateFlow.isInitialized()) updateFlow.value.close()
         editDialog?.dismiss()
         loginDialog?.dismiss()
+        dismissShelfFolder(refreshRoot = false)
         cancelWallpaperExport()
         wallpaperWorker.shutdownNow()
         folderRequest++
@@ -248,6 +272,7 @@ class InkActivity : Activity() {
         if (updateFlow.isInitialized()) updateFlow.value.pause()
         pendingBook = null
         resumed = false
+        if (page == LauncherPage.SHELF) refreshVisibleShelfCovers()
         loginDialog?.dismiss()
         cancelWallpaperExport()
         observeWeRead()
@@ -272,16 +297,19 @@ class InkActivity : Activity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
+        rememberTileScroll()
         outState.putInt("page", page.ordinal)
-        outState.putInt("app_page", appPage)
+        outState.putInt("apps_row", appsScroll.row)
+        outState.putInt("apps_offset", appsScroll.offset)
+        outState.putInt("shelf_row", shelfScroll.row)
+        outState.putInt("shelf_offset", shelfScroll.offset)
         if (updateFlow.isInitialized()) outState.putString("update_apk", updateFlow.value.awaitingPermission)
     }
 
     @Deprecated("Android 8.1 uses key-based navigation")
     override fun onBackPressed() {
         when {
-            page == LauncherPage.SHELF && folderTrail.isNotEmpty() -> navigateFolder(folderTrail.dropLast(1))
-            page == LauncherPage.SHELF && weReadGroup != null -> navigateWeRead(null)
+            page == LauncherPage.SHELF && folderDialog != null -> backFromShelfFolder()
             page != LauncherPage.HOME -> show(LauncherPage.HOME)
             !isDefaultHome() -> super.onBackPressed()
         }
@@ -302,9 +330,15 @@ class InkActivity : Activity() {
 
     private fun show(next: LauncherPage) {
         if (next !in visiblePages) return
-        val changed = page != next
-        if (changed && next == LauncherPage.APPS) appPage = 0
-        if (changed) pendingBook = null
+        if (page != next) {
+            pendingBook = null
+            when (next) {
+                LauncherPage.APPS -> appsScroll = TileScroll()
+                LauncherPage.SHELF -> shelfScroll = TileScroll()
+                else -> Unit
+            }
+        }
+        if (next != LauncherPage.SHELF) dismissShelfFolder(refreshRoot = false)
         page = next
         render()
         if (next == LauncherPage.HOME) loadRecentLocalBooks()
@@ -313,6 +347,7 @@ class InkActivity : Activity() {
     }
 
     private fun observeWeRead() {
+        if (resumed && page == LauncherPage.SETTINGS) weRead.loadProfile()
         val observe = resumed && page in setOf(LauncherPage.HOME, LauncherPage.SHELF, LauncherPage.SETTINGS)
         if (observe == observingWeRead) return
         observingWeRead = observe
@@ -321,34 +356,46 @@ class InkActivity : Activity() {
 
     private fun refreshShelf() {
         if (page != LauncherPage.SHELF || !resumed || isDestroyed) return
-        if (weReadGroup == null) reloadFolder()
+        reloadFolder()
+        if (folderDialog != null) reloadOpenFolder()
         if (prefs.shelfSources.weRead) weRead.whenLoaded {
             if (page == LauncherPage.SHELF && resumed && !isDestroyed && prefs.shelfSources.weRead) weRead.sync()
         }
     }
 
-    private fun render(scrollY: Int = 0) {
+    private fun rememberTileScroll() {
+        val position = (body as? ListView)?.tileScroll() ?: return
+        when (renderedPage) {
+            LauncherPage.APPS -> appsScroll = position
+            LauncherPage.SHELF -> shelfScroll = position
+            else -> Unit
+        }
+    }
+
+    private fun render(scrollY: Int = 0, resetAppsScroll: Boolean = false) {
+        rememberTileScroll()
+        if (resetAppsScroll) appsScroll = TileScroll()
         val pages = visiblePages
-        if (page !in pages) page = LauncherPage.HOME
+        if (page !in pages) {
+            dismissShelfFolder(refreshRoot = false)
+            page = LauncherPage.HOME
+        }
+        if (page == LauncherPage.SHELF && folderDialog != null) {
+            shelfOrderDirty = true
+            renderShelfFolder()
+            return
+        }
         val root = column().apply { setBackgroundColor(Color.WHITE) }
         val panel = column().apply { setPadding(dp(PAGE_INSET_DP), 0, dp(PAGE_INSET_DP), 0) }
         root.addView(panel, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
-        val scroll = ScrollView(this).apply {
-            isFillViewport = true
-            isVerticalScrollBarEnabled = false
-            overScrollMode = View.OVER_SCROLL_NEVER
-            clipToPadding = false
-        }
-        body = scroll
         val withBooks = page == LauncherPage.SHELF || page == LauncherPage.HOME
         val sort = if (page == LauncherPage.SHELF) ShelfSort.LAST_OPENED else ShelfSort.NAME
         val opened = if (withBooks) prefs.folderOpenTimes() else emptyMap()
         val onlineOpened = if (withBooks) weReadHistory.times(weRead.snapshot.account) else emptyMap()
-        panel.addView(scroll, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
         val content = column().apply { setPadding(0, dp(PAGE_TOP_DP), 0, dp(PAGE_BOTTOM_DP)) }
-        scroll.addView(content, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         val coverTargets = mutableListOf<ShelfCovers.Target>()
         val onlineCoverTargets = mutableListOf<WeReadCovers.Target>()
+        var grid: ListView? = null
         when (page) {
             LauncherPage.HOME -> fillHome(content, coverTargets, onlineCoverTargets, opened, onlineOpened)
             LauncherPage.APPS -> {
@@ -357,27 +404,73 @@ class InkActivity : Activity() {
                 val pinnedKeys = pins.toSet()
                 val byKey = apps.associateBy { it.key }
                 val ordered = pins.mapNotNull(byKey::get) + apps.filterNot { it.key in pinnedKeys }
-                content.showApps(scroll, ordered, pinnedKeys, appPage, appTileHeight(),
-                    onPageChanged = { appPage = it }, tile = ::appTile)
+                grid = content.showApps(ordered, pinnedKeys, appTileHeight(), tile = ::appTile)
             }
             LauncherPage.SHELF -> {
                 shelfOrderDirty = false
-                val pager = FrameLayout(this)
-                panel.addView(pager, LinearLayout.LayoutParams(MATCH_PARENT, dp(ACTION_HEIGHT_DP)))
-                fillShelf(content, pager, coverTargets, onlineCoverTargets, sort, opened, onlineOpened)
+                grid = fillShelf(content, sort, opened, onlineOpened)
             }
             LauncherPage.ABOUT -> content.showAbout(installedVersion)
-            LauncherPage.SETTINGS -> settingsPage.render(content)
+            LauncherPage.SETTINGS -> settingsPage.render(content, weRead.profile)
         }
+        shelfViewport = if (page == LauncherPage.SHELF) grid?.let { watchShelfRows(it, opened) } else null
+        val view = if (grid == null) ScrollView(this).apply {
+            isFillViewport = true
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            clipToPadding = false
+            addView(content, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        } else grid.apply {
+            setPadding(0, dp(PAGE_TOP_DP), 0, dp(PAGE_BOTTOM_DP))
+            restoreTileScroll(if (page == LauncherPage.APPS) appsScroll else shelfScroll)
+        }
+        body = view
+        renderedPage = page
+        panel.addView(view, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
         root.addView(footer(pages), LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         setContentView(root)
         renderedPages = pages
-        covers.show(coverTargets, sort, opened) { location ->
+        if (page == LauncherPage.SHELF) {
+            refreshVisibleShelfCovers()
+        } else {
+            visibleShelfCovers = null
+            covers.show(coverTargets, sort, opened) { location -> mosaicRevisions[location.id] ?: 0 }
+            renderedOnlineCovers = onlineCoverTargets
+            bindOnlineCovers()
+        }
+        if (grid == null && scrollY > 0) view.post { view.scrollTo(0, scrollY) }
+    }
+
+    private fun watchShelfRows(list: ListView, opened: Map<String, Long>): ShelfViewport {
+        var scheduled = false
+        list.setOnScrollListener(object : AbsListView.OnScrollListener {
+            override fun onScrollStateChanged(view: AbsListView, scrollState: Int) = Unit
+
+            override fun onScroll(view: AbsListView, first: Int, visible: Int, total: Int) {
+                if (scheduled) return
+                scheduled = true
+                view.postOnAnimation {
+                    scheduled = false
+                    if (view.isAttachedToWindow) refreshVisibleShelfCovers()
+                }
+            }
+        })
+        return ShelfViewport(list, opened)
+    }
+
+    private fun refreshVisibleShelfCovers() {
+        if (page != LauncherPage.SHELF) return
+        val viewport = if (!resumed) null else if (folderDialog != null) folderViewport else shelfViewport
+        val rows = viewport?.list?.let { list ->
+            (0 until list.childCount).mapNotNull { list.getChildAt(it).tag as? ShelfRowCovers }
+        }.orEmpty()
+        if (rows == visibleShelfCovers) return
+        visibleShelfCovers = rows
+        covers.show(rows.flatMap { it.local }, ShelfSort.LAST_OPENED, viewport?.opened.orEmpty()) { location ->
             mosaicRevisions[location.id] ?: 0
         }
-        renderedOnlineCovers = onlineCoverTargets
+        renderedOnlineCovers = rows.flatMap { it.online }
         bindOnlineCovers()
-        if (scrollY > 0) scroll.post { scroll.scrollTo(0, scrollY) }
     }
 
     private fun bindOnlineCovers() {
@@ -462,88 +555,45 @@ class InkActivity : Activity() {
     }
 
     private fun fillShelf(
-        content: LinearLayout, pager: FrameLayout,
-        localCovers: MutableList<ShelfCovers.Target>, onlineCovers: MutableList<WeReadCovers.Target>,
-        sort: ShelfSort, opened: Map<String, Long>, onlineOpened: Map<String, Long>,
-    ) {
+        content: LinearLayout, sort: ShelfSort, opened: Map<String, Long>, onlineOpened: Map<String, Long>,
+    ): ListView? {
         val sources = prefs.shelfSources
         if (sources != renderedShelfSources) {
-            shelfPage = 0
             renderedShelfSources = sources
             if (!sources.local) {
-                folderTrail = emptyList()
                 folderContents = FolderContents.Loading
                 folderRequest++
             }
-            if (!sources.weRead) weReadGroup = null
         }
-        val trail = folderTrail
         val snapshot = weRead.snapshot
         val cloudShelf = snapshot.shelf.takeIf { sources.weRead }
         val hidden = prefs.hiddenBooks(snapshot.account)
         renderedHiddenBooks = hidden
-        val group = cloudShelf?.groups?.firstOrNull { it.id == weReadGroup }
-        if (weReadGroup != null && group == null) {
-            weReadGroup = null
-            shelfPage = 0
-        }
-        val folder = trail.lastOrNull()
-        val backLabel = when {
-            group != null -> "返回书架"
-            folder != null -> if (trail.size == 1) "返回书架" else "返回上一级"
-            else -> null
-        }
-        val local = folderContents.takeIf { sources.local && group == null }
+        val local = folderContents.takeIf { sources.local }
         val entries = buildList {
             (local as? FolderContents.Items)?.entries?.forEach { add(ShelfEntry.Local(it)) }
-            if (folder == null) {
-                (group?.books ?: cloudShelf?.root).orEmpty().forEach { add(ShelfEntry.Online(it)) }
-            }
+            cloudShelf?.root.orEmpty().forEach { add(ShelfEntry.Online(it)) }
         }.orderedOnShelf(sort, opened, onlineOpened, hidden)
-        val hasSource = sources.local || sources.weRead
-        val message = if (entries.isEmpty()) {
-            val loading = local == FolderContents.Loading ||
-                (sources.weRead && folder == null && group == null && weRead.state == WeReadController.State.LOADING)
-            if (!loading) shelfPage = 0
-            when {
-                !hasSource -> "未开启书架来源"
-                group != null -> "这个文件夹没有书籍"
-                loading -> "正在读取书架…"
-                local == FolderContents.PermissionRequired -> null
-                local == FolderContents.Unavailable && folder != null -> "无法读取此目录"
-                folder != null -> "这个目录没有书籍"
-                else -> "书架上还没有书籍"
-            }
+        val message = if (entries.isEmpty()) when {
+            !sources.local && !sources.weRead -> "未开启书架来源"
+            local == FolderContents.Loading -> "正在读取书架…"
+            local == FolderContents.PermissionRequired -> null
+            else -> "暂无可显示的书籍"
         } else null
-        val total = (entries.size - 1).coerceAtLeast(0) / SHELF_PAGE_SIZE + 1
-        val index = if (entries.isEmpty()) 0 else shelfPage.coerceIn(0, total - 1).also { shelfPage = it }
-        val start = index * SHELF_PAGE_SIZE
-        val model = ShelfPageModel(
-            folderName = group?.name ?: folder?.name,
-            backLabel = backLabel,
-            permissionRequired = local == FolderContents.PermissionRequired,
-            notice = message,
-            entries = entries.subList(start, minOf(start + SHELF_PAGE_SIZE, entries.size)),
-            index = index,
-            total = total,
-        )
-        content.showShelf(model, pager,
-            goBack = { if (group != null) navigateWeRead(null) else navigateFolder(trail.dropLast(1)) },
-            requestBooksPermission = ::requestBooksPermission,
-            movePage = {
-                shelfPage += it
-                render()
-            },
-            tile = { shelfTile(it, localCovers, onlineCovers, sort, onlineOpened, hiddenOnHome = it in hidden) },
-        )
+        return content.showShelfGrid(ShelfPageModel(null, null, local == FolderContents.PermissionRequired, message, entries),
+            sort, onlineOpened, hidden)
     }
 
-    private fun navigateWeRead(group: String?) {
+    private fun LinearLayout.showShelfGrid(
+        model: ShelfPageModel, sort: ShelfSort, onlineOpened: Map<String, Long>, hidden: HiddenBooks,
+    ): ListView? = showShelf(model, ::backFromShelfFolder, ::requestBooksPermission) { entry, covers ->
+        shelfTile(entry, covers.local, covers.online, sort, onlineOpened, hiddenOnHome = entry in hidden)
+    }
+
+    private fun openShelfGroup(group: String) {
         pendingBook = null
         weReadGroup = group
-        shelfPage = 0
-        render()
-        if (group == null) refreshShelf()
+        renderShelfFolder()
     }
 
     private fun openWeReadBook(book: WeReadEntry.Book) {
@@ -563,7 +613,7 @@ class InkActivity : Activity() {
             is ShelfEntry.Local -> openFolderItem(entry.item)
             is ShelfEntry.Online -> when (val item = entry.entry) {
                 is WeReadEntry.Book -> openWeReadBook(item)
-                is WeReadEntry.Group -> navigateWeRead(item.id)
+                is WeReadEntry.Group -> openShelfGroup(item.id)
             }
         }
     }
@@ -571,6 +621,7 @@ class InkActivity : Activity() {
     private fun openFolderItem(item: FolderItem) {
         if (item.isDirectory) {
             prefs.recordFolderOpen(item.location)
+            shelfOrderDirty = true
             navigateFolder(folderTrail + item.location)
             return
         }
@@ -756,37 +807,127 @@ class InkActivity : Activity() {
         pendingBook = null
         weReadGroup = null
         folderTrail = trail
-        shelfPage = 0
-        folderContents = FolderContents.Loading
-        render()
-        if (trail.isEmpty()) refreshShelf() else reloadFolder()
+        openFolderContents = FolderContents.Loading
+        renderShelfFolder()
+        reloadOpenFolder()
+    }
+
+    private fun backFromShelfFolder() {
+        if (folderTrail.size > 1) navigateFolder(folderTrail.dropLast(1)) else dismissShelfFolder()
+    }
+
+    private fun renderShelfFolder() {
+        val sources = prefs.shelfSources
+        val snapshot = weRead.snapshot
+        val folder = folderTrail.lastOrNull()?.takeIf { sources.local }
+        val group = snapshot.shelf?.groups?.firstOrNull { sources.weRead && it.id == weReadGroup }
+        val name = group?.name ?: folder?.name
+        if (name == null) {
+            dismissShelfFolder()
+            return
+        }
+        renderedFolderId?.let { id -> folderViewport?.list?.tileScroll()?.let { folderScroll[id] = it } }
+        val id = group?.id ?: requireNotNull(folder).id
+        val sort = ShelfSort.LAST_OPENED
+        val opened = prefs.folderOpenTimes()
+        val onlineOpened = weReadHistory.times(snapshot.account)
+        val hidden = prefs.hiddenBooks(snapshot.account)
+        val local = openFolderContents.takeIf { folder != null }
+        val entries = buildList {
+            (local as? FolderContents.Items)?.entries?.forEach { add(ShelfEntry.Local(it)) }
+            group?.books.orEmpty().forEach { add(ShelfEntry.Online(it)) }
+        }.orderedOnShelf(sort, opened, onlineOpened, hidden)
+        val message = if (entries.isEmpty()) when (local) {
+            FolderContents.Loading -> "正在读取书架…"
+            FolderContents.PermissionRequired -> null
+            FolderContents.Unavailable -> "无法读取此目录"
+            else -> if (group != null) "这个文件夹没有书籍" else "这个目录没有书籍"
+        } else null
+        val label = if (folderTrail.size > 1) "返回上一级" else "返回书架"
+        val panel = paperDialogPanel(maxHeight = dp(resources.configuration.screenHeightDp * 3 / 5))
+        val list = panel.showShelfGrid(ShelfPageModel(name, label, local == FolderContents.PermissionRequired, message, entries),
+            sort, onlineOpened, hidden)
+        folderViewport = list?.let {
+            panel.addView(it, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+            folderScroll[id]?.let(it::restoreTileScroll)
+            watchShelfRows(it, opened)
+        }
+        renderedFolderId = id
+        val dialog = folderDialog ?: paperDialog().also { window ->
+            folderDialog = window
+            window.setOnDismissListener { if (folderDialog === window) dismissShelfFolder() }
+            window.setOnKeyListener { _, key, event ->
+                if (key != KeyEvent.KEYCODE_BACK || folderTrail.size <= 1) false else {
+                    if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) backFromShelfFolder()
+                    true
+                }
+            }
+        }
+        dialog.setContentView(panel)
+        if (!dialog.isShowing) {
+            val width = panel.shelfFolderWidth(checkNotNull(body).width)
+            dialog.show()
+            dialog.window?.setLayout(width, WRAP_CONTENT)
+        }
+        refreshVisibleShelfCovers()
+    }
+
+    private fun dismissShelfFolder(refreshRoot: Boolean = true) {
+        val dialog = folderDialog
+        folderDialog = null
+        weReadGroup = null
+        folderTrail = emptyList()
+        folderViewport = null
+        renderedFolderId = null
+        folderScroll.clear()
+        openFolderContents = FolderContents.Loading
+        openFolderRequest++
+        if (dialog == null) return
+        pendingBook = null
+        if (dialog.isShowing) dialog.dismiss()
+        if (refreshRoot && page == LauncherPage.SHELF && resumed) {
+            if (shelfOrderDirty) render() else refreshVisibleShelfCovers()
+        }
     }
 
     private fun reloadFolder() {
         if (!prefs.shelfSources.local) return
-        val location = folderTrail.lastOrNull()
         val request = ++folderRequest
+        readFolder(null) {
+            if (request == folderRequest && prefs.shelfSources.local && it != folderContents) {
+                folderContents = it
+                if (page == LauncherPage.SHELF) {
+                    if (folderDialog == null) render() else shelfOrderDirty = true
+                }
+            }
+        }
+    }
+
+    private fun reloadOpenFolder() {
+        val location = folderTrail.lastOrNull() ?: return
+        val request = ++openFolderRequest
+        readFolder(location) {
+            if (request == openFolderRequest && folderDialog != null && it != openFolderContents) {
+                openFolderContents = it
+                renderShelfFolder()
+            }
+        }
+    }
+
+    private fun readFolder(location: FolderLocation?, deliver: (FolderContents) -> Unit) {
         val gate = when {
             Build.VERSION.SDK_INT > 28 -> FolderContents.Unsupported
             !hasBooksPermission() -> FolderContents.PermissionRequired
             else -> null
         }
         if (gate != null) {
-            updateFolder(gate)
+            deliver(gate)
             return
         }
         folderWorker.execute {
             val result = FolderAccess.contents(location)
-            runOnUiThread {
-                if (request == folderRequest && !isDestroyed && prefs.shelfSources.local) updateFolder(result)
-            }
+            runOnUiThread { if (!isDestroyed) deliver(result) }
         }
-    }
-
-    private fun updateFolder(result: FolderContents) {
-        if (result == folderContents) return
-        folderContents = result
-        if (page == LauncherPage.SHELF && weReadGroup == null) render(scrollY = body?.scrollY ?: 0)
     }
 
     @Suppress("DEPRECATION")
@@ -801,7 +942,10 @@ class InkActivity : Activity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
         when (requestCode) {
-            READ_LOCAL_BOOKS -> if (granted) reloadFolder() else toast("可在应用权限中允许 Ginkgo 读取存储")
+            READ_LOCAL_BOOKS -> if (granted) {
+                reloadFolder()
+                reloadOpenFolder()
+            } else toast("可在应用权限中允许 Ginkgo 读取存储")
             WRITE_WALLPAPER -> if (granted) {
                 if (resumed) requestWallpaperExport() else resumeWallpaperExport = true
             } else toast("允许存储权限后才能导出壁纸")
@@ -810,7 +954,8 @@ class InkActivity : Activity() {
 
     @Suppress("DEPRECATION")
     private fun requestWallpaperExport() {
-        if (!resumed || isDestroyed || page != LauncherPage.SETTINGS || wallpaperDialog != null || wallpaperAwaitingCache) return
+        if (!resumed || isDestroyed || page != LauncherPage.SETTINGS || wallpaperDialog != null ||
+            wallpaperAwaitingCache || wallpaperSaving) return
         if (Build.VERSION.SDK_INT < 29 && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), WRITE_WALLPAPER)
             return
@@ -831,7 +976,6 @@ class InkActivity : Activity() {
             prefs.folderOpenTimes() - hidden.local
         } else emptyMap()
         val onlineOpened = weReadHistory.times(snapshot.account)
-        val context = applicationContext
         val localCover = covers
         val onlineCover = weReadCovers.value.wallpaperSource(snapshot.account, snapshot.session)
         val dialog = paperDialog()
@@ -851,26 +995,62 @@ class InkActivity : Activity() {
                 val recent = recentShelfBooks(FolderAccess.recentBooks(localOpened, Int.MAX_VALUE).filter { it.coverFormat != null },
                     snapshot.shelf?.books.orEmpty(), localOpened, onlineOpened, hidden, Int.MAX_VALUE)
                 val deadline = SystemClock.elapsedRealtime() + 15_000
-                val image = ShelfWallpaper.composeRecent(layout, recent) { entry ->
+                ShelfWallpaper.composeRecent(layout, recent) { entry ->
                     when (entry) {
                         is ShelfEntry.Local -> localCover.wallpaperCover(entry.item, layout.coverEdge)
                         is ShelfEntry.Online -> (entry.entry as? WeReadEntry.Book)?.let { onlineCover(it, deadline) }
                     }
-                } ?: return@runCatching null
-                try { ShelfWallpaper.save(context, image) } finally { image.recycle() }
+                }
             }
             runOnUiThread {
-                if (wallpaperDialog !== dialog || isDestroyed) return@runOnUiThread
+                if (wallpaperDialog !== dialog || isDestroyed) {
+                    result.getOrNull()?.recycle()
+                    return@runOnUiThread
+                }
                 wallpaperDialog = null
                 wallpaperJob = null
                 dialog.dismiss()
                 result.fold(
-                    onSuccess = { path ->
-                        if (path == null) showPaperDialog("没有可用封面", "最近打开的书里没有可用封面。", "知道了")
-                        else showPaperDialog("壁纸已导出", "已保存到 $path", "知道了")
+                    onSuccess = { image ->
+                        if (image == null) showPaperDialog("没有可用封面", "最近打开的书里没有可用封面。", "知道了")
+                        else showWallpaperPreview(image)
                     },
-                    onFailure = { showPaperDialog("未能导出壁纸", "请检查存储空间后再试。", "知道了") },
+                    onFailure = { showPaperDialog("未能生成壁纸", "请稍后重试。", "知道了") },
                 )
+            }
+        }
+    }
+
+    private fun showWallpaperPreview(bitmap: Bitmap) {
+        val image = ImageView(this).apply {
+            adjustViewBounds = true
+            maxHeight = dp(resources.configuration.screenHeightDp / 2)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            contentDescription = "书架壁纸预览"
+            setImageBitmap(bitmap)
+        }
+        val dialog = showPaperDialog("壁纸预览", "保存位置：${ShelfWallpaper.saveDirectory}/", "保存", extraContent = image) {
+            wallpaperDialog = null
+            saveWallpaper(bitmap)
+        }
+        wallpaperDialog = dialog
+        dialog.setOnDismissListener {
+            image.setImageDrawable(null)
+            if (wallpaperDialog === dialog) wallpaperDialog = null
+        }
+    }
+
+    private fun saveWallpaper(bitmap: Bitmap) {
+        if (wallpaperSaving) return
+        wallpaperSaving = true
+        val context = applicationContext
+        wallpaperWorker.execute {
+            val failed = runCatching { ShelfWallpaper.save(context, bitmap) }.isFailure
+            runOnUiThread {
+                wallpaperSaving = false
+                if (failed && !isDestroyed && resumed && page == LauncherPage.SETTINGS) {
+                    showPaperDialog("未能保存壁纸", "请检查存储空间后再试。", "知道了")
+                }
             }
         }
     }
@@ -904,13 +1084,13 @@ class InkActivity : Activity() {
         loginDialog = dialog
         dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
             WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
+        dialog.setContentView(paperDialogContent(column()).apply { id = android.R.id.custom })
         dialog.setOnDismissListener {
             if (loginDialog === dialog) {
                 loginDialog = null
                 weRead.stopLogin()
             }
         }
-        // beginLogin notifies the dialog immediately; later callbacks replace only its contents.
         weRead.beginLogin()
         presentPaperDialog(dialog)
     }
@@ -920,9 +1100,20 @@ class InkActivity : Activity() {
             dialog.dismiss()
             return
         }
+        val content = dialog.findViewById<ScrollView>(android.R.id.custom)
+        val state = weRead.state
+        val next = state to weRead.notice
+        val previous = content.tag as? Pair<*, *>
+        if (next == previous) return
+        content.tag = next
+        if (previous?.first == WeReadController.State.VERIFY && state != WeReadController.State.VERIFY) {
+            dialog.currentFocus?.let { focused ->
+                getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(focused.windowToken, 0)
+                focused.clearFocus()
+            }
+        }
         val panel = paperDialogPanel().apply {
             gravity = Gravity.CENTER_HORIZONTAL
-            val state = weRead.state
             addView(label(if (state == WeReadController.State.VERIFY) "验证微信读书登录" else "微信读书扫码登录",
                 DIALOG_TITLE_SP, face = Typeface.DEFAULT_BOLD).apply { gravity = Gravity.CENTER },
                 LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
@@ -934,9 +1125,12 @@ class InkActivity : Activity() {
             var submit: (() -> Unit)? = null
             var button = "确认"
             when (state) {
-                WeReadController.State.SCAN -> {
+                WeReadController.State.STARTING_LOGIN, WeReadController.State.SCAN -> {
                     message("使用手机微信扫一扫，并确认登录")
-                    weRead.qr?.let { addView(wechatQr(it), LinearLayout.LayoutParams(MATCH_PARENT, dp(222))) }
+                    val qr = weRead.qr?.let(::wechatQr) ?: label("正在获取二维码…", ACTION_TEXT_SP, tone = SOFT_INK).apply {
+                        gravity = Gravity.CENTER
+                    }
+                    addView(qr, LinearLayout.LayoutParams(MATCH_PARENT, dp(222)))
                 }
                 WeReadController.State.VERIFY -> {
                     message(when (weRead.notice) {
@@ -993,7 +1187,9 @@ class InkActivity : Activity() {
                 })
             }
         }
-        dialog.setContentView(paperDialogContent(panel))
+        content.removeAllViews()
+        content.addView(panel)
+        content.scrollTo(0, 0)
     }
 
     private fun wechatQr(modules: Array<BooleanArray>): View = object : View(this) {
@@ -1060,8 +1256,7 @@ class InkActivity : Activity() {
         trackEditDialog(showPaperDialog(title, message, if (isPinned) "取消置顶" else "置顶") {
             val pins = prefs.pinned() - item.key
             prefs.savePins(if (isPinned) pins else listOf(item.key) + pins)
-            if (!isPinned) appPage = 0
-            render()
+            render(resetAppsScroll = !isPinned)
         })
     }
 
