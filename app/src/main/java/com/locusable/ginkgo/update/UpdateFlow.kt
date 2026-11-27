@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
+import android.view.View
 import com.locusable.ginkgo.ui.showPaperDialog
 import java.io.File
 import java.util.concurrent.Executors
@@ -21,7 +22,7 @@ internal class UpdateFlow(private val activity: Activity) {
     private var dialog: Dialog? = null
     var awaitingPermission: String? = null
 
-    fun check() = task("正在检查更新", "正在读取 GitHub 上的正式发布。", "无法检查更新", "请检查网络连接后重试。", {
+    fun check() = task("正在检查更新", "正在读取 GitHub 上的正式发布。", "无法检查更新", "请检查网络连接后重试。", work = {
         client.latest()?.let { it to client.installedCode() }
     }) { result ->
         when {
@@ -38,11 +39,22 @@ internal class UpdateFlow(private val activity: Activity) {
             .replace("**", "").trim()
         val version = "${release.versionName} (${release.versionCode})"
         val description = if (notes.isBlank()) version else "$version\n\n$notes"
-        dialog = activity.showPaperDialog("发现新版本", description, "下载更新") {
-            task("正在下载更新", "下载并校验 APK，完成后将打开系统安装界面。", "无法下载更新", "下载或校验失败，请稍后重试。", {
-                client.download(release)
-            }, ::requestInstall)
-        }
+        dialog = activity.showPaperDialog("发现新版本", description, "下载更新") { download(release) }
+    }
+
+    private fun download(release: ReleaseUpdate) {
+        val progress = UpdateDownloadProgress(activity)
+        task("下载更新", "完成校验后将打开系统安装界面。", "无法下载更新", "下载或校验失败，请稍后重试。",
+            extraContent = progress,
+            work = { activeDialog ->
+                client.download(release) { percent ->
+                    activity.runOnUiThread {
+                        if (dialog === activeDialog && activeDialog.isShowing) progress.show(percent)
+                    }
+                }
+            },
+            onResult = ::requestInstall,
+        )
     }
 
     private fun requestInstall(apk: File) {
@@ -95,13 +107,21 @@ internal class UpdateFlow(private val activity: Activity) {
         dialog = activity.showPaperDialog(title, text, "确定")
     }
 
-    private fun <T> task(title: String, text: String, errorTitle: String, errorText: String, work: () -> T, onResult: (T) -> Unit) {
+    private fun <T> task(
+        title: String,
+        text: String,
+        errorTitle: String,
+        errorText: String,
+        extraContent: View? = null,
+        work: (Dialog) -> T,
+        onResult: (T) -> Unit,
+    ) {
         pause()
-        val progress = activity.showPaperDialog(title, text, "取消")
+        val progress = activity.showPaperDialog(title, text, "取消", extraContent = extraContent)
         dialog = progress
         progress.setOnDismissListener { if (dialog === progress) pause() }
         job = worker.submit {
-            val result = try { Result.success(work()) } catch (e: Exception) { Result.failure(e) }
+            val result = try { Result.success(work(progress)) } catch (e: Exception) { Result.failure(e) }
             activity.runOnUiThread {
                 if (dialog === progress && progress.isShowing) {
                     job = null

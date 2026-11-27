@@ -20,6 +20,7 @@ internal fun Activity.showPaperDialog(
     title: String,
     message: String,
     primaryLabel: String,
+    extraContent: View? = null,
     onConfirm: (() -> Unit)? = null,
 ): Dialog {
     val dialog = paperDialog()
@@ -36,6 +37,10 @@ internal fun Activity.showPaperDialog(
         setTextColor(SOFT_INK)
         setLineSpacing(dp(3).toFloat(), 1f)
     }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(6) })
+
+    if (extraContent != null) {
+        panel.addView(extraContent, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(14) })
+    }
 
     val buttons = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL

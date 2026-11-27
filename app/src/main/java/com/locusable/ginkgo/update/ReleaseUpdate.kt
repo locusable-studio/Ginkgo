@@ -62,7 +62,8 @@ internal class ReleaseUpdateClient(private val context: Context) {
         return ReleaseUpdate(code, version, release.optString("body", "").take(1500), apkUrl, apkBytes, digest)
     }
 
-    fun download(release: ReleaseUpdate): File {
+    /** Reports 10% steps based on bytes written; 100% means transfer finished and verification started. */
+    fun download(release: ReleaseUpdate, onProgress: (Int) -> Unit): File {
         check(release.versionCode > installedCode())
         val directory = UpdateApks.directory(context)
         check(directory.isDirectory || directory.mkdirs() || directory.isDirectory)
@@ -71,15 +72,23 @@ internal class ReleaseUpdateClient(private val context: Context) {
         val staged = File.createTempFile("download-", ".apk", directory)
         try {
             val digest = MessageDigest.getInstance("SHA-256")
+            var reportedPercent = 0
             val bytes = request(release.apkUrl) { stream ->
                 staged.outputStream().use { output ->
-                    stream.readBounded(release.apkBytes) { buffer, length ->
+                    stream.readBounded(release.apkBytes) { buffer, length, total ->
                         digest.update(buffer, 0, length)
                         output.write(buffer, 0, length)
+                        val percent = (total * 10 / release.apkBytes).toInt() * 10
+                        if (percent > reportedPercent && percent < 100) {
+                            reportedPercent = percent
+                            onProgress(percent)
+                        }
                     }
                 }
             }
-            check(bytes == release.apkBytes && digest.digest().toHexString() == release.sha256)
+            check(bytes == release.apkBytes && !Thread.currentThread().isInterrupted)
+            onProgress(100)
+            check(digest.digest().toHexString() == release.sha256)
             verifyArchive(staged, release)
             check(!Thread.currentThread().isInterrupted)
             val apk = File(directory, "${release.sha256}.apk")
@@ -103,7 +112,7 @@ internal class ReleaseUpdateClient(private val context: Context) {
 
     private fun readJson(uri: URI, limit: Long): JSONObject = request(uri) { stream ->
         val out = ByteArrayOutputStream()
-        stream.readBounded(limit) { buffer, length -> out.write(buffer, 0, length) }
+        stream.readBounded(limit) { buffer, length, _ -> out.write(buffer, 0, length) }
         JSONObject(out.toString(Charsets.UTF_8.name()))
     }
 
@@ -136,7 +145,7 @@ internal class ReleaseUpdateClient(private val context: Context) {
     }
 }
 
-private fun InputStream.readBounded(limit: Long, write: (ByteArray, Int) -> Unit): Long {
+private fun InputStream.readBounded(limit: Long, write: (ByteArray, Int, Long) -> Unit): Long {
     val buffer = ByteArray(16 * 1024)
     val deadline = SystemClock.elapsedRealtime() + 120_000L
     var size = 0L
@@ -146,7 +155,7 @@ private fun InputStream.readBounded(limit: Long, write: (ByteArray, Int) -> Unit
         if (length == -1) return size
         size += length
         check(size <= limit)
-        write(buffer, length)
+        write(buffer, length, size)
     }
 }
 

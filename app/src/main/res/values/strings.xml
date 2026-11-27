@@ -5,4 +5,5 @@
     <string name="about_description">一个简单的墨水屏桌面启动器。</string>
     <string name="about_credit">制作</string>
     <string name="about_version">版本</string>
+    <string name="update_download_percent">%1$d%%</string>
 </resources>
