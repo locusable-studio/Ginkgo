@@ -26,6 +26,7 @@ import com.locusable.ginkgo.ui.dp
 import com.locusable.ginkgo.ui.gap
 import com.locusable.ginkgo.ui.pressBackground
 import com.locusable.ginkgo.ui.section
+import com.locusable.ginkgo.ui.tileRows
 
 private const val SETTINGS_SECTION_GAP_DP = 16
 
@@ -42,26 +43,30 @@ internal class SettingsPage(
 
     fun render(content: LinearLayout, profile: WeReadWeb.Profile?) = with(content) {
         section("显示页面", "")
-        toggleRow(LauncherPage.HOME.title, checked = true)
-        toggleRow(LauncherPage.APPS.title, prefs.showAppsTab) {
-            prefs.showAppsTab = it
-            onTabsChanged()
-        }
-        toggleRow(LauncherPage.SHELF.title, prefs.showShelfTab) {
-            prefs.showShelfTab = it
-            onTabsChanged()
-        }
-        toggleRow(LauncherPage.ABOUT.title, prefs.showAboutTab) {
-            prefs.showAboutTab = it
-            onTabsChanged()
-        }
-        toggleRow(LauncherPage.SETTINGS.title, checked = true)
+        tileRows(listOf(
+            toggle(LauncherPage.HOME.title, checked = true),
+            toggle(LauncherPage.APPS.title, prefs.showAppsTab) {
+                prefs.showAppsTab = it
+                onTabsChanged()
+            },
+            toggle(LauncherPage.SHELF.title, prefs.showShelfTab) {
+                prefs.showShelfTab = it
+                onTabsChanged()
+            },
+            toggle(LauncherPage.ABOUT.title, prefs.showAboutTab) {
+                prefs.showAboutTab = it
+                onTabsChanged()
+            },
+            toggle(LauncherPage.SETTINGS.title, checked = true),
+        ), columns = 2, rowGap = 0) { it }
 
         gap(SETTINGS_SECTION_GAP_DP)
         section("书架来源", "")
         val sources = prefs.shelfSources
-        toggleRow("本地书架", sources.local) { prefs.shelfSources = prefs.shelfSources.copy(local = it) }
-        toggleRow("微信读书", sources.weRead) { prefs.shelfSources = prefs.shelfSources.copy(weRead = it) }
+        tileRows(listOf(
+            toggle("本地书架", sources.local) { prefs.shelfSources = prefs.shelfSources.copy(local = it) },
+            toggle("微信读书", sources.weRead) { prefs.shelfSources = prefs.shelfSources.copy(weRead = it) },
+        ), columns = 2, rowGap = 0) { it }
 
         gap(SETTINGS_SECTION_GAP_DP)
         section("账号", "")
@@ -97,34 +102,32 @@ internal class SettingsPage(
         if (focused) row.requestFocus()
     }
 
-    private fun LinearLayout.toggleRow(name: String, checked: Boolean, onToggle: ((Boolean) -> Unit)? = null) {
+    private fun toggle(name: String, checked: Boolean, onToggle: ((Boolean) -> Unit)? = null) = CheckBox(context).apply {
         val enabled = onToggle != null
-        addView(CheckBox(context).apply {
-            val tone = if (enabled) INK else DISABLED_INK
-            val mark = buttonDrawable?.mutate()?.apply { setTint(tone) }
-            setButtonDrawable(null)
-            setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, mark, null)
-            compoundDrawablePadding = context.dp(12)
-            text = name
-            textSize = ROW_TEXT_SP
-            setTextColor(tone)
-            setAllCaps(false)
-            gravity = Gravity.START or Gravity.CENTER_VERTICAL
-            maxLines = 2
-            ellipsize = TextUtils.TruncateAt.END
-            minimumHeight = context.dp(ACTION_HEIGHT_DP)
-            background = if (enabled) context.pressBackground() else null
-            backgroundTintList = null
-            defaultFocusHighlightEnabled = false
-            setPaddingRelative(context.dp(4), context.dp(6), context.dp(4), context.dp(6))
-            isEnabled = enabled
-            isChecked = checked
+        val tone = if (enabled) INK else DISABLED_INK
+        val mark = buttonDrawable?.mutate()?.apply { setTint(tone) }
+        setButtonDrawable(null)
+        setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, mark, null)
+        compoundDrawablePadding = context.dp(12)
+        text = name
+        textSize = ROW_TEXT_SP
+        setTextColor(tone)
+        setAllCaps(false)
+        gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        maxLines = 2
+        ellipsize = TextUtils.TruncateAt.END
+        minimumHeight = context.dp(ACTION_HEIGHT_DP)
+        background = if (enabled) context.pressBackground() else null
+        backgroundTintList = null
+        defaultFocusHighlightEnabled = false
+        setPaddingRelative(context.dp(4), context.dp(6), context.dp(4), context.dp(6))
+        isEnabled = enabled
+        isChecked = checked
+        jumpDrawablesToCurrentState()
+        if (onToggle != null) setOnCheckedChangeListener { _, value ->
             jumpDrawablesToCurrentState()
-            if (onToggle != null) setOnCheckedChangeListener { _, value ->
-                jumpDrawablesToCurrentState()
-                onToggle(value)
-            }
-        }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+            onToggle(value)
+        }
     }
 
     private fun LinearLayout.actionRow(name: String, icon: InkGlyph.Kind, open: () -> Unit) {

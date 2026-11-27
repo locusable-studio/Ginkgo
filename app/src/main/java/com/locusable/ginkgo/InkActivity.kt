@@ -735,20 +735,7 @@ class InkActivity : Activity() {
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         val artwork = FrameLayout(context).apply { showCoverTitle(book.displayTitle, compact = true) }
         addView(artwork, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-        addCoverSource(if (book is ShelfEntry.Online) "微信读书" else "多看")
         bindBookCover(book, artwork, localCovers, onlineCovers)
-    }
-
-    private fun FrameLayout.addCoverSource(source: String) {
-        addView(label(source, 10f, face = Typeface.DEFAULT_BOLD).apply {
-            setPadding(dp(4), dp(2), dp(4), dp(2))
-            setSingleLine(true)
-            ellipsize = TextUtils.TruncateAt.END
-            background = paperShape(SOFT_INK)
-        }, FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT, Gravity.BOTTOM or Gravity.END).apply {
-            marginEnd = dp(4)
-            bottomMargin = dp(4)
-        })
     }
 
     private fun bindBookCover(
@@ -788,7 +775,6 @@ class InkActivity : Activity() {
                 topMargin = dp(4)
                 marginEnd = dp(4)
             })
-            if (online) addCoverSource("微信读书")
         }
         bind(artwork)
         addView(cover, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))

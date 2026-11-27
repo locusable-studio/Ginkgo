@@ -82,7 +82,7 @@ private fun Context.resumeRow(book: ShelfEntry, cover: View, bindAuthor: ((Strin
     showAuthor(author.text.toString())
     bindAuthor(::showAuthor)
     setPaddingRelative(0, dp(4), dp(2), dp(4))
-    addView(cover, LinearLayout.LayoutParams(dp(54), WRAP_CONTENT))
+    addView(cover, LinearLayout.LayoutParams(dp(60), WRAP_CONTENT))
     addView(column().apply {
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         addView(label(title, 21f, face = Typeface.DEFAULT_BOLD).apply {
