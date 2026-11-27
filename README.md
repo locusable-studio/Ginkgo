@@ -1,6 +1,6 @@
 # Ginkgo
 
-[![Android Build](https://github.com/locusable-studio/Ginkgo/actions/workflows/android-release.yml/badge.svg?branch=main)](https://github.com/locusable-studio/Ginkgo/actions/workflows/android-release.yml)
+[![Android Build](https://github.com/locusable-studio/Ginkgo/actions/workflows/android-release.yml/badge.svg)](https://github.com/locusable-studio/Ginkgo/actions/workflows/android-release.yml)
 ![App version](assets/badges/version.svg)
 ![Android 8.1](assets/badges/android.svg)
 
