@@ -7,7 +7,7 @@
 An e-ink launcher for the first-generation Xiaomi MiReader (Android 8.1).
 
 <p align="center">
-  <img src="home-preview.png" width="280" alt="Ginkgo home screen">
+  <img src="docs/screenshots/home.png" width="280" alt="Ginkgo home screen">
 </p>
 
 ## Bookshelf
