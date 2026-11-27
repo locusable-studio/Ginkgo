@@ -3,7 +3,6 @@ name: Android Build
 on:
   push:
     tags: ['v*']
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,13 +16,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    if: github.event_name == 'workflow_dispatch'
+  release:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    permissions:
+      contents: write
     steps:
-      - &checkout
-        name: Check out the triggering commit
+      - name: Check out the triggering commit
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -31,8 +31,7 @@ jobs:
           git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' \
             fetch --no-tags --depth=1 "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$GITHUB_SHA"
           git checkout -q --detach FETCH_HEAD
-      - &version-check
-        name: Check version metadata
+      - name: Check version metadata
         run: |
           version=$(sed -nE 's/^[[:space:]]*versionName = "([0-9.]+)"$/\1/p' app/build.gradle.kts)
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
@@ -42,8 +41,7 @@ jobs:
             echo 'The tag must match versionName.' >&2
             exit 1
           fi
-      - &compile
-        name: Build and lint the release variant
+      - name: Build and lint the release variant
         env:
           SDK_PLATFORM: android-37.0
           BUILD_TOOLS: '36.0.0'
@@ -63,17 +61,6 @@ jobs:
             "$sdkmanager" --sdk_root="$ANDROID_HOME" --install "platforms;$SDK_PLATFORM" "build-tools;$BUILD_TOOLS"
           fi
           ./gradlew --no-daemon :app:assembleRelease :app:lintRelease
-
-  release:
-    if: github.event_name == 'push' && github.ref_type == 'tag'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    permissions:
-      contents: write
-    steps:
-      - *checkout
-      - *version-check
-      - *compile
       - name: Sign and verify the release APK
         env:
           GINKGO_RELEASE_KEYSTORE: ${{ secrets.GINKGO_RELEASE_KEYSTORE }}
