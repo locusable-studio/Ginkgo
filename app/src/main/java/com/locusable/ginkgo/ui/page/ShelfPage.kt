@@ -18,7 +18,6 @@ import com.locusable.ginkgo.ui.LABEL_TEXT_SP
 import com.locusable.ginkgo.ui.SOFT_INK
 import com.locusable.ginkgo.ui.action
 import com.locusable.ginkgo.ui.buttonRole
-import com.locusable.ginkgo.ui.collectionHeader
 import com.locusable.ginkgo.ui.column
 import com.locusable.ginkgo.ui.dp
 import com.locusable.ginkgo.ui.gap
@@ -27,6 +26,7 @@ import com.locusable.ginkgo.ui.label
 import com.locusable.ginkgo.ui.notice
 import com.locusable.ginkgo.ui.paperButton
 import com.locusable.ginkgo.ui.tileRows
+import com.locusable.ginkgo.ui.title
 import com.locusable.ginkgo.ui.updatePager
 
 private const val SHELF_COLUMNS = 4
@@ -53,12 +53,13 @@ internal fun LinearLayout.showShelf(
     tile: (ShelfEntry) -> View,
 ) {
     val permissionEmpty = model.permissionRequired && model.entries.isEmpty()
-    collectionHeader(
+    title(
         model.title,
         accessory = model.sort?.takeUnless { permissionEmpty }?.let { context.sortButton(it, changeSort) },
         leading = model.backLabel?.let { context.shelfBackButton(it, goBack) },
     )
-    pager.visibility = if (permissionEmpty) View.GONE else View.VISIBLE
+    val paginated = !permissionEmpty && model.total > 1
+    pager.visibility = if (paginated) View.VISIBLE else View.GONE
     if (permissionEmpty) {
         showPermissionEmpty(requestBooksPermission)
         return
@@ -66,7 +67,7 @@ internal fun LinearLayout.showShelf(
     if (model.permissionRequired) showPermissionHint(requestBooksPermission)
     model.notice?.let { notice(it) }
     tileRows(model.entries, SHELF_COLUMNS, tile = tile)
-    pager.updatePager(model.index, model.total, movePage)
+    if (paginated) pager.updatePager(model.index, model.total, movePage)
 }
 
 private fun LinearLayout.showPermissionEmpty(requestPermission: () -> Unit) {

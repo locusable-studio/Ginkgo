@@ -42,6 +42,7 @@ internal fun LinearLayout.gap(height: Int) = addView(View(context), LinearLayout
 
 internal fun View.action(stroke: Int = Color.TRANSPARENT, click: () -> Unit) {
     isFocusable = true
+    defaultFocusHighlightEnabled = false
     background = context.pressBackground(stroke)
     setOnClickListener { click() }
 }
@@ -49,7 +50,7 @@ internal fun View.action(stroke: Int = Color.TRANSPARENT, click: () -> Unit) {
 internal fun LinearLayout.title(text: String, accessory: View? = null, leading: View? = null) {
     val heading = context.label(text, PAGE_TITLE_SP, face = Typeface.DEFAULT_BOLD).apply {
         minimumHeight = context.dp(ACTION_HEIGHT_DP)
-        if (leading == null) maxLines = 2 else setSingleLine(true)
+        maxLines = 2
         ellipsize = TextUtils.TruncateAt.END
     }
     if (accessory == null && leading == null) {
@@ -64,17 +65,11 @@ internal fun LinearLayout.title(text: String, accessory: View? = null, leading: 
     gap(HEADING_GAP_DP)
 }
 
-internal fun LinearLayout.collectionHeader(name: String, accessory: View? = null, leading: View? = null) {
-    title(name, accessory, leading)
-    rule()
-}
-
 internal fun LinearLayout.section(left: String, right: String) {
     addView(context.horizontal().apply {
         addView(context.label(left, LABEL_TEXT_SP, face = Typeface.DEFAULT_BOLD), LinearLayout.LayoutParams(0, MATCH_PARENT, 1f))
         if (right.isNotEmpty()) addView(context.caption(right), LinearLayout.LayoutParams(WRAP_CONTENT, MATCH_PARENT))
     }, LinearLayout.LayoutParams(MATCH_PARENT, context.dp(33)))
-    rule()
 }
 
 internal fun <T : Any> LinearLayout.tileRows(
@@ -108,11 +103,12 @@ internal fun FrameLayout.updatePager(index: Int, total: Int, move: (Int) -> Unit
     addView(context.horizontal().apply {
         gravity = Gravity.CENTER
         addView(context.pageButton("上一页", index > 0) { move(-1) }, LinearLayout.LayoutParams(WRAP_CONTENT, MATCH_PARENT))
-        addView(context.label("${index + 1}/$total", PAGER_TEXT_SP, tone = SOFT_INK).apply {
+        addView(context.label("${index + 1} / $total", PAGER_TEXT_SP, tone = SOFT_INK).apply {
             gravity = Gravity.CENTER
             minimumWidth = context.dp(56)
-            setPadding(context.dp(8), 0, context.dp(8), 0)
+            setPaddingRelative(context.dp(8), 0, context.dp(8), 0)
             maxLines = 1
+            fontFeatureSettings = "'tnum'"
             contentDescription = "第 ${index + 1} 页，共 $total 页"
         }, LinearLayout.LayoutParams(WRAP_CONTENT, MATCH_PARENT))
         addView(context.pageButton("下一页", index + 1 < total) { move(1) }, LinearLayout.LayoutParams(WRAP_CONTENT, MATCH_PARENT))
@@ -122,13 +118,13 @@ internal fun FrameLayout.updatePager(index: Int, total: Int, move: (Int) -> Unit
 private const val PAGER_TEXT_SP = 13f
 
 private fun Context.pageButton(text: String, enabled: Boolean, click: () -> Unit) =
-    label(text, PAGER_TEXT_SP, tone = if (enabled) INK else DISABLED_INK).apply {
+    label(text, LABEL_TEXT_SP, tone = if (enabled) INK else DISABLED_INK).apply {
         gravity = Gravity.CENTER
         minimumWidth = dp(80)
-        setPadding(dp(10), 0, dp(10), 0)
         maxLines = 1
         isEnabled = enabled
         if (enabled) action(click = click)
+        setPaddingRelative(dp(12), 0, dp(12), 0)
         buttonRole()
     }
 

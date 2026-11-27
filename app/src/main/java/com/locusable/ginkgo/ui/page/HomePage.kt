@@ -18,7 +18,6 @@ import com.locusable.ginkgo.ui.PAGE_INSET_DP
 import com.locusable.ginkgo.ui.SOFT_INK
 import com.locusable.ginkgo.ui.action
 import com.locusable.ginkgo.ui.buttonRole
-import com.locusable.ginkgo.ui.collectionHeader
 import com.locusable.ginkgo.ui.column
 import com.locusable.ginkgo.ui.dp
 import com.locusable.ginkgo.ui.gap
@@ -27,6 +26,7 @@ import com.locusable.ginkgo.ui.label
 import com.locusable.ginkgo.ui.notice
 import com.locusable.ginkgo.ui.section
 import com.locusable.ginkgo.ui.tileRows
+import com.locusable.ginkgo.ui.title
 
 internal const val HOME_COLUMNS = 4
 internal const val HOME_RECENT_BOOK_LIMIT = 4
@@ -49,7 +49,7 @@ internal fun LinearLayout.showHome(
         ellipsize = TextUtils.TruncateAt.END
         maxWidth = context.dp((resources.configuration.screenWidthDp - 2 * PAGE_INSET_DP) / 2)
     }
-    collectionHeader(context.getString(R.string.app_name), accessory = credit)
+    title(context.getString(R.string.app_name), accessory = credit)
     val featured = recentBooks.firstOrNull()
     if (featured != null) {
         gap(PAGE_INSET_DP)
