@@ -1,5 +1,9 @@
 # Ginkgo
 
+[![Android Build](https://github.com/locusable-studio/Ginkgo/actions/workflows/android-release.yml/badge.svg?branch=main)](https://github.com/locusable-studio/Ginkgo/actions/workflows/android-release.yml)
+![App version 0.4.56](assets/badges/version.svg)
+![Android 8.1](assets/badges/android.svg)
+
 An e-ink launcher for the first-generation Xiaomi MiReader (Android 8.1).
 
 <p align="center">

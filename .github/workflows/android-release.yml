@@ -1,0 +1,51 @@
+name: Android Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out the triggering commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git init -q .
+          git -c credential.helper= -c 'credential.https://github.com.helper=!gh auth git-credential' \
+            fetch --no-tags --depth=1 "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$GITHUB_SHA"
+          git checkout -q --detach FETCH_HEAD
+      - name: Check version metadata
+        run: |
+          version=$(sed -nE 's/^[[:space:]]*versionName = "([0-9.]+)"$/\1/p' app/build.gradle.kts)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          grep -Fq ">$version</text>" assets/badges/version.svg
+          test -s ".github/release-notes/v$version.md"
+          if [[ "$GITHUB_REF_TYPE" == 'tag' && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo 'The tag must match versionName.' >&2
+            exit 1
+          fi
+      - name: Build and lint the release variant
+        env:
+          SDK_PLATFORM: android-37.0
+          BUILD_TOOLS: '36.0.0'
+        run: |
+          export JAVA_HOME="${JAVA_HOME_17_X64:?JDK 17 is required}"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          sdkmanager --install "platforms;$SDK_PLATFORM" "build-tools;$BUILD_TOOLS"
+          ./gradlew --no-daemon :app:assembleRelease :app:lintRelease

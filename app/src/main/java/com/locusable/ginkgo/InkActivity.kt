@@ -397,6 +397,7 @@ class InkActivity : Activity() {
         val icon = catalog.icon(item)?.let { original ->
             ImageView(this@InkActivity).apply {
                 setImageDrawable(original)
+                colorFilter = grayscale
                 scaleType = ImageView.ScaleType.FIT_CENTER
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             }
