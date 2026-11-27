@@ -8,6 +8,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.LinearLayout
 import android.widget.TextView
 
@@ -92,5 +93,23 @@ internal fun <T : Any> LinearLayout.tileRows(
                 })
             }
         }, LinearLayout.LayoutParams(MATCH_PARENT, rowSize))
+    }
+}
+
+internal fun LinearLayout.notice(message: String) {
+    addView(context.label(message, ACTION_TEXT_SP, tone = SOFT_INK).apply {
+        setPadding(0, context.dp(HEADING_GAP_DP), 0, context.dp(HEADING_GAP_DP))
+    }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+}
+
+internal fun View.buttonRole(longAction: String? = null) {
+    accessibilityDelegate = object : View.AccessibilityDelegate() {
+        override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfo) {
+            super.onInitializeAccessibilityNodeInfo(host, info)
+            info.className = "android.widget.Button"
+            if (longAction != null) info.addAction(AccessibilityNodeInfo.AccessibilityAction(
+                AccessibilityNodeInfo.ACTION_LONG_CLICK, longAction,
+            ))
+        }
     }
 }

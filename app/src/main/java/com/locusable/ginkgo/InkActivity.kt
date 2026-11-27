@@ -20,14 +20,12 @@ import android.os.SystemClock
 import android.text.InputFilter
 import android.text.InputType
 import android.text.TextUtils
-import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.view.ViewTreeObserver
 import android.view.WindowManager
-import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -45,6 +43,7 @@ import com.locusable.ginkgo.shelf.HiddenBooks
 import com.locusable.ginkgo.shelf.ShelfEntry
 import com.locusable.ginkgo.shelf.ShelfSort
 import com.locusable.ginkgo.shelf.cover.ShelfCovers
+import com.locusable.ginkgo.shelf.displayTitle
 import com.locusable.ginkgo.shelf.local.DuokanBookLink
 import com.locusable.ginkgo.shelf.local.FolderAccess
 import com.locusable.ginkgo.shelf.local.FolderContents
@@ -70,21 +69,25 @@ import com.locusable.ginkgo.ui.LINE
 import com.locusable.ginkgo.ui.PAGE_BOTTOM_DP
 import com.locusable.ginkgo.ui.PAGE_INSET_DP
 import com.locusable.ginkgo.ui.PAGE_TOP_DP
-import com.locusable.ginkgo.ui.PaperRow
 import com.locusable.ginkgo.ui.ROW_TEXT_SP
 import com.locusable.ginkgo.ui.SECTION_GAP_DP
 import com.locusable.ginkgo.ui.SOFT_INK
 import com.locusable.ginkgo.ui.TILE_ROW_GAP
 import com.locusable.ginkgo.ui.action
 import com.locusable.ginkgo.ui.bookTitlePreview
+import com.locusable.ginkgo.ui.buttonRole
 import com.locusable.ginkgo.ui.collectionHeader
 import com.locusable.ginkgo.ui.column
 import com.locusable.ginkgo.ui.dp
 import com.locusable.ginkgo.ui.gap
 import com.locusable.ginkgo.ui.horizontal
 import com.locusable.ginkgo.ui.label
+import com.locusable.ginkgo.ui.notice
+import com.locusable.ginkgo.ui.page.HOME_COLUMNS
+import com.locusable.ginkgo.ui.page.HOME_RECENT_BOOK_LIMIT
 import com.locusable.ginkgo.ui.page.SettingsPage
 import com.locusable.ginkgo.ui.page.showAbout
+import com.locusable.ginkgo.ui.page.showHome
 import com.locusable.ginkgo.ui.paperButton
 import com.locusable.ginkgo.ui.paperDialog
 import com.locusable.ginkgo.ui.paperDialogContent
@@ -94,7 +97,6 @@ import com.locusable.ginkgo.ui.paperShape
 import com.locusable.ginkgo.ui.presentPaperDialog
 import com.locusable.ginkgo.ui.pressBackground
 import com.locusable.ginkgo.ui.rule
-import com.locusable.ginkgo.ui.section
 import com.locusable.ginkgo.ui.showPaperDialog
 import com.locusable.ginkgo.ui.tileRows
 import com.locusable.ginkgo.wallpaper.ShelfWallpaper
@@ -106,8 +108,7 @@ class InkActivity : Activity() {
     private companion object {
         const val READ_LOCAL_BOOKS = 111
         const val WRITE_WALLPAPER = 112
-        const val MAX_RECENT_BOOKS = 4
-        const val HOME_COLUMNS = 4
+        const val MAX_HOME_BOOKS = 1 + HOME_RECENT_BOOK_LIMIT
         const val APP_COLUMNS = 4
         const val APP_TILE_HEIGHT = 112
         const val SHELF_COLUMNS = 4
@@ -119,13 +120,6 @@ class InkActivity : Activity() {
     private val settingsPage by lazy {
         SettingsPage(this, prefs,
             onTabsChanged = { render(scrollY = body?.scrollY ?: 0) },
-            onLayoutChanged = {
-                when (it) {
-                    LauncherPage.APPS -> appPage = 0
-                    LauncherPage.SHELF -> shelfPage = 0
-                    else -> Unit
-                }
-            },
             openWeReadAccount = ::manageWeReadAccount,
             exportWallpaper = ::requestWallpaperExport,
         )
@@ -135,7 +129,6 @@ class InkActivity : Activity() {
     private val wallpaperWorker = Executors.newSingleThreadExecutor()
     private val covers by lazy { ShelfCovers(applicationContext) }
     private val grayscale = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f) })
-    private val developer get() = getString(R.string.app_developer)
     @Suppress("DEPRECATION")
     private val installedVersion by lazy {
         val info = packageManager.getPackageInfo(packageName, 0)
@@ -355,7 +348,7 @@ class InkActivity : Activity() {
                 shelfOrderDirty = false
                 val pager = FrameLayout(this)
                 panel.addView(pager, LinearLayout.LayoutParams(MATCH_PARENT, dp(ACTION_HEIGHT_DP)))
-                fillShelf(content, scroll, pager, coverTargets, onlineCoverTargets, sort, opened, onlineOpened)
+                fillShelf(content, pager, coverTargets, onlineCoverTargets, sort, opened, onlineOpened)
             }
             LauncherPage.ABOUT -> content.showAbout(installedVersion)
             LauncherPage.SETTINGS -> settingsPage.render(content)
@@ -380,63 +373,29 @@ class InkActivity : Activity() {
         }
     }
 
-    private fun wordmark(): LinearLayout = horizontal().apply {
-        gravity = Gravity.BOTTOM or Gravity.START
-        val available = (resources.displayMetrics.widthPixels - dp(62)).toFloat()
-        val byline = label("by $developer", 13f, tone = SOFT_INK).apply {
-            includeFontPadding = false
-            maxLines = 1
-            fitLineTo(available * 0.4f)
-        }
-        val name = label(getString(R.string.app_name), 54f, face = Typeface.create("serif", Typeface.NORMAL)).apply {
-            includeFontPadding = false
-            maxLines = 1
-            fitLineTo(available - byline.paint.measureText(byline.text.toString()))
-        }
-        addView(name, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
-        addView(byline, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
-            marginStart = dp(11)
-            bottomMargin = dp(9)
-        })
-    }
-
-    private fun TextView.fitLineTo(width: Float) {
-        val measured = paint.measureText(text.toString())
-        if (measured > width) setTextSize(TypedValue.COMPLEX_UNIT_PX, textSize * width.coerceAtLeast(1f) / measured)
-    }
-
     private fun fillHome(
         content: LinearLayout, localCovers: MutableList<ShelfCovers.Target>, onlineCovers: MutableList<WeReadCovers.Target>,
         opened: Map<String, Long>, onlineOpened: Map<String, Long>,
-    ) = with(content) {
-        addView(wordmark(), LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+    ) {
         val pins = prefs.pinned().mapNotNull { key -> apps.find { it.key == key } }.take(MAX_PINS)
         val books = homeBooks(opened, onlineOpened)
         renderedRecentBooks = books
-        val grid = prefs.homeGrid
-        if (pins.isNotEmpty()) {
-            gap(PAGE_INSET_DP)
-            section("常用应用", "${pins.size} / $MAX_PINS")
-            if (grid) tileRows(pins, columns = HOME_COLUMNS, rowHeight = appTileHeight()) { appTile(it, pinned = true) }
-            else pins.forEach { item -> addView(appRow(item, pinned = true)) }
-        }
-        if (books.isNotEmpty()) {
-            gap(if (pins.isEmpty()) PAGE_INSET_DP else SECTION_GAP_DP)
-            section("最近打开", "")
-            if (grid) tileRows(books, columns = HOME_COLUMNS) {
-                shelfTile(it, localCovers, onlineCovers, ShelfSort.NAME, onlineOpened)
-            } else books.forEach { addView(shelfListRow(it)) }
-        } else if (pins.isEmpty() && recentLocalBooks != null && weRead.state != WeReadController.State.LOADING) {
-            gap(PAGE_INSET_DP)
-            folderNotice("长按应用可固定到首页，打开过的书也会显示在这里。")
-        }
+        content.showHome(
+            pins, books,
+            booksReady = recentLocalBooks != null && weRead.state != WeReadController.State.LOADING,
+            appTileHeight = appTileHeight(),
+            featuredCover = { book -> resumeCover(book, localCovers, onlineCovers) },
+            recentBookTile = { book -> shelfTile(book, localCovers, onlineCovers, ShelfSort.NAME, onlineOpened) },
+            pinnedAppTile = { app -> appTile(app, pinned = true) },
+            openBook = ::openShelfEntry,
+        )
     }
 
     private fun homeBooks(
         local: Map<String, Long> = prefs.folderOpenTimes(),
         online: Map<String, Long> = weReadHistory.times(weRead.snapshot.account),
     ) = recentShelfBooks(recentLocalBooks.orEmpty(), weRead.snapshot.shelf?.books.orEmpty(), local, online,
-        prefs.hiddenBooks(weRead.snapshot.account), MAX_RECENT_BOOKS)
+        prefs.hiddenBooks(weRead.snapshot.account), MAX_HOME_BOOKS)
 
     private fun loadRecentLocalBooks() {
         val request = ++recentLocalRequest
@@ -444,7 +403,7 @@ class InkActivity : Activity() {
             prefs.folderOpenTimes() - prefs.hiddenBooks(null).local
         } else emptyMap()
         folderWorker.execute {
-            val recent = FolderAccess.recentBooks(opened, MAX_RECENT_BOOKS)
+            val recent = FolderAccess.recentBooks(opened, MAX_HOME_BOOKS)
             runOnUiThread {
                 if (request != recentLocalRequest || isDestroyed) return@runOnUiThread
                 val firstLoad = recentLocalBooks == null
@@ -493,28 +452,55 @@ class InkActivity : Activity() {
     private fun fillApps(content: LinearLayout, scroll: ScrollView) = with(content) {
         collectionHeader(LauncherPage.APPS.title)
         if (apps.isEmpty()) {
-            folderNotice("没有可启动的应用")
+            notice("没有可启动的应用")
             return@with
         }
-        val grid = prefs.appsGrid
-        val rows = addRows()
+        val rows = column().also { addView(it, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)) }
         val pager = FrameLayout(this@InkActivity).apply { visibility = View.GONE }
         addView(pager, LinearLayout.LayoutParams(MATCH_PARENT, dp(ACTION_HEIGHT_DP)))
         val pinned = prefs.pinned().toSet()
-        if (grid) {
-            val rowHeight = appTileHeight()
-            val rowCount = (apps.size - 1) / APP_COLUMNS + 1
-            showPagedRows(content, scroll, rows, pager, appPage, alwaysShowPager = false,
-                measure = { IntArray(rowCount) { dp(rowHeight) + dp(TILE_ROW_GAP) } },
-                onPage = { appPage = it }) { range ->
-                val visible = apps.subList(range.first * APP_COLUMNS, minOf(apps.size, (range.last + 1) * APP_COLUMNS))
-                rows.tileRows(visible, APP_COLUMNS, rowHeight = rowHeight) { item -> appTile(item, pinned = item.key in pinned) }
+        val rowHeight = appTileHeight()
+        val rowStep = dp(rowHeight) + dp(TILE_ROW_GAP)
+        val rowCount = (apps.size - 1) / APP_COLUMNS + 1
+        var rowsPerPage = 0
+
+        fun showPage(index: Int) {
+            val pageSize = rowsPerPage * APP_COLUMNS
+            val total = (apps.size - 1) / pageSize + 1
+            appPage = index.coerceIn(0, total - 1)
+            val start = appPage * pageSize
+            rows.removeAllViews()
+            rows.tileRows(apps.subList(start, minOf(start + pageSize, apps.size)), APP_COLUMNS, rowHeight = rowHeight) { app ->
+                appTile(app, pinned = app.key in pinned)
             }
-        } else {
-            showPagedList(content, scroll, rows, pager, apps, appPage, alwaysShowPager = false,
-                title = ::displayLabel, badgeFor = { if (it.key in pinned) InkGlyph.Kind.PIN else null },
-                onPage = { appPage = it }, makeRow = { appRow(it, pinned = it.key in pinned) })
+            if (total > 1) {
+                pager.visibility = View.VISIBLE
+                updatePager(pager, appPage, total) { step ->
+                    scroll.scrollTo(0, 0)
+                    showPage(appPage + step)
+                }
+            } else {
+                pager.visibility = View.GONE
+                pager.removeAllViews()
+            }
         }
+
+        // Reserve inline pager space only if the grid cannot fit on one page.
+        val layoutPages = ViewTreeObserver.OnPreDrawListener {
+            if (rows.width == 0) return@OnPreDrawListener true
+            val height = (scroll.height - rows.top - content.paddingBottom).coerceAtLeast(0)
+            val available = if (rowCount > height / rowStep) (height - dp(ACTION_HEIGHT_DP)).coerceAtLeast(0) else height
+            val count = (available / rowStep).coerceIn(1, rowCount)
+            if (count == rowsPerPage) return@OnPreDrawListener true
+            val index = if (rowsPerPage == 0) appPage else appPage * rowsPerPage / count
+            rowsPerPage = count
+            showPage(index)
+            false
+        }
+        scroll.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(view: View) = view.viewTreeObserver.addOnPreDrawListener(layoutPages)
+            override fun onViewDetachedFromWindow(view: View) = view.viewTreeObserver.removeOnPreDrawListener(layoutPages)
+        })
     }
 
     private fun paginationRow(index: Int, total: Int, move: (Int) -> Unit) = horizontal().apply {
@@ -531,7 +517,7 @@ class InkActivity : Activity() {
     }
 
     private fun fillShelf(
-        content: LinearLayout, scroll: ScrollView, pager: FrameLayout,
+        content: LinearLayout, pager: FrameLayout,
         localCovers: MutableList<ShelfCovers.Target>, onlineCovers: MutableList<WeReadCovers.Target>,
         sort: ShelfSort, opened: Map<String, Long>, onlineOpened: Map<String, Long>,
     ) = with(content) {
@@ -595,27 +581,19 @@ class InkActivity : Activity() {
                 folder != null -> "这个目录没有书籍"
                 else -> "书架上还没有书籍"
             }
-            message?.let { folderNotice(it) }
+            message?.let { notice(it) }
             if (!loading) shelfPage = 0
             updatePager(pager, 0, 1) {}
             return@with
         }
-        if (prefs.shelfGrid) {
-            val pageSize = SHELF_COLUMNS * 2
-            val total = (entries.size - 1) / pageSize + 1
-            shelfPage = shelfPage.coerceIn(0, total - 1)
-            val start = shelfPage * pageSize
-            tileRows(entries.subList(start, minOf(start + pageSize, entries.size)), SHELF_COLUMNS) {
-                shelfTile(it, localCovers, onlineCovers, sort, onlineOpened, hiddenOnHome = it in hidden)
-            }
-            updatePager(pager, shelfPage, total) { shelfPage += it; render() }
-        } else {
-            showPagedList(content, scroll, addRows(), pager, entries, shelfPage, alwaysShowPager = true,
-                title = ShelfEntry::name, badgeFor = { if (it in hidden) InkGlyph.Kind.EYE_OFF else null },
-                singleLine = true, onPage = { shelfPage = it }) {
-                shelfListRow(it, hiddenOnHome = it in hidden)
-            }
+        val pageSize = SHELF_COLUMNS * 2
+        val total = (entries.size - 1) / pageSize + 1
+        shelfPage = shelfPage.coerceIn(0, total - 1)
+        val start = shelfPage * pageSize
+        tileRows(entries.subList(start, minOf(start + pageSize, entries.size)), SHELF_COLUMNS) {
+            shelfTile(it, localCovers, onlineCovers, sort, onlineOpened, hiddenOnHome = it in hidden)
         }
+        updatePager(pager, shelfPage, total) { shelfPage += it; render() }
     }
 
     private fun navigateWeRead(group: String?) {
@@ -641,117 +619,6 @@ class InkActivity : Activity() {
     private fun updatePager(pager: FrameLayout, index: Int, total: Int, move: (Int) -> Unit) {
         pager.removeAllViews()
         pager.addView(paginationRow(index, total, move), FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-    }
-
-    private fun LinearLayout.addRows() = column().also { addView(it, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)) }
-
-    private fun <T> showPagedList(
-        content: LinearLayout, scroll: ScrollView, rows: LinearLayout, pager: FrameLayout,
-        entries: List<T>, initialPage: Int, alwaysShowPager: Boolean,
-        title: (T) -> String, badgeFor: (T) -> InkGlyph.Kind? = { null }, singleLine: Boolean = false,
-        onPage: (Int) -> Unit, makeRow: (T) -> View,
-    ) = showPagedRows(content, scroll, rows, pager, initialPage, alwaysShowPager,
-        measure = { width -> measureRows(entries, width, title, badgeFor, singleLine) }, onPage = onPage) { range ->
-        for (index in range) rows.addView(makeRow(entries[index]))
-    }
-
-    private fun showPagedRows(
-        content: LinearLayout, scroll: ScrollView, rows: LinearLayout, pager: FrameLayout,
-        initialPage: Int, alwaysShowPager: Boolean,
-        measure: (Int) -> IntArray, onPage: (Int) -> Unit, drawPage: (IntRange) -> Unit,
-    ) {
-        var pages = emptyList<IntRange>()
-        var currentPage = initialPage
-
-        fun showPage(index: Int) {
-            currentPage = index.coerceIn(pages.indices)
-            onPage(currentPage)
-            rows.removeAllViews()
-            drawPage(pages[currentPage])
-            if (alwaysShowPager || pages.size > 1) {
-                pager.visibility = View.VISIBLE
-                updatePager(pager, currentPage, pages.size) { step ->
-                    scroll.scrollTo(0, 0)
-                    showPage(currentPage + step)
-                }
-            } else {
-                pager.visibility = View.GONE
-                pager.removeAllViews()
-            }
-        }
-
-        // Measure after the header and any sticky pager have taken their space.
-        var lastWidth = 0
-        var lastHeight = -1
-        val layoutPages = ViewTreeObserver.OnPreDrawListener {
-            val width = rows.width
-            val height = (scroll.height - rows.top - content.paddingBottom).coerceAtLeast(0)
-            if (width == 0 || (width == lastWidth && height == lastHeight)) return@OnPreDrawListener true
-            lastWidth = width
-            lastHeight = height
-            val first = pages.getOrNull(currentPage)?.first
-            val heights = measure(width)
-            // The Apps pager is inline and only needs space if the list spills over one page.
-            val available = if (!alwaysShowPager && heights.sumOf { it.toLong() } > height) {
-                (height - dp(ACTION_HEIGHT_DP)).coerceAtLeast(0)
-            } else height
-            pages = pageRanges(heights, available)
-            showPage(if (first == null) currentPage else pages.indexOfFirst { first in it })
-            false // Wait for the rows to lay out before drawing them on the e-ink screen.
-        }
-        scroll.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
-            override fun onViewAttachedToWindow(view: View) = view.viewTreeObserver.addOnPreDrawListener(layoutPages)
-            override fun onViewDetachedFromWindow(view: View) = view.viewTreeObserver.removeOnPreDrawListener(layoutPages)
-        })
-    }
-
-    private fun <T> measureRows(
-        entries: List<T>, width: Int, title: (T) -> String, badgeFor: (T) -> InkGlyph.Kind?, singleLine: Boolean,
-    ): IntArray {
-        val samples = mutableMapOf<InkGlyph.Kind?, PaperRow>()
-        val widthSpec = View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY)
-        val heightSpec = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
-        return IntArray(entries.size) { index ->
-            val item = entries[index]
-            val badge = badgeFor(item)
-            val row = samples.getOrPut(badge) {
-                PaperRow(this, "", InkGlyph(this, InkGlyph.Kind.DOCUMENT), InkGlyph.Kind.ARROW, badge, singleLine)
-            }
-            row.titleView.text = title(item)
-            row.titleView.forceLayout()
-            row.forceLayout()
-            row.measure(widthSpec, heightSpec)
-            row.measuredHeight
-        }
-    }
-
-    private fun pageRanges(heights: IntArray, pageHeight: Int): List<IntRange> = buildList {
-        var start = 0
-        var remaining = pageHeight
-        for ((index, rowHeight) in heights.withIndex()) {
-            if (index > start && rowHeight > remaining) {
-                add(start until index)
-                start = index
-                remaining = pageHeight
-            }
-            remaining -= rowHeight
-        }
-        add(start until heights.size)
-    }
-
-    private fun shelfListRow(entry: ShelfEntry, hiddenOnHome: Boolean = false): View {
-        val icon = if (entry.directory) InkGlyph.Kind.FILE else InkGlyph.Kind.DOCUMENT
-        val arrow = if (entry.directory) InkGlyph.Kind.RIGHT else InkGlyph.Kind.ARROW
-        val badge = if (hiddenOnHome) InkGlyph.Kind.EYE_OFF else null
-        return PaperRow(this, entry.name, InkGlyph(this, icon), arrow, badge, singleLine = true).apply {
-            contentDescription = buildString {
-                append(entry.name)
-                if (entry is ShelfEntry.Online) append("，微信读书")
-                if (hiddenOnHome) append("，已在首页隐藏")
-            }
-            action { openShelfEntry(entry) }
-            bookVisibilityAction(entry, hiddenOnHome)
-        }
     }
 
     private fun openShelfEntry(entry: ShelfEntry) {
@@ -821,42 +688,49 @@ class InkActivity : Activity() {
     private fun shelfTile(
         entry: ShelfEntry, localCovers: MutableList<ShelfCovers.Target>, onlineCovers: MutableList<WeReadCovers.Target>,
         sort: ShelfSort, onlineOpened: Map<String, Long>, hiddenOnHome: Boolean = false,
-    ): View = (when (entry) {
-        is ShelfEntry.Local -> localShelfTile(entry.item, localCovers, hiddenOnHome)
-        is ShelfEntry.Online -> coverTile(entry.name, entry.directory, online = true, hiddenOnHome = hiddenOnHome, bind = { cover ->
-            when (val item = entry.entry) {
-                is WeReadEntry.Book -> onlineCovers.add(WeReadCovers.Target(item) { cover.showCoverBitmap(it) })
-                is WeReadEntry.Group -> {
-                    val books = item.books.map(ShelfEntry::Online).orderedOnShelf(sort, emptyMap(), onlineOpened).take(4)
-                        .map { it.entry as WeReadEntry.Book }
-                    val faces = books.map { ShelfCovers.Face(it.name, null) }.toMutableList()
-                    if (faces.isNotEmpty()) cover.showCoverMosaic(faces, fileNames = false)
-                    for ((index, book) in books.withIndex()) {
-                        onlineCovers.add(WeReadCovers.Target(book) { bitmap ->
-                            faces[index] = ShelfCovers.Face(book.name, bitmap)
-                            cover.showCoverMosaic(faces, fileNames = false)
-                        })
-                    }
+    ): View = coverTile(entry.displayTitle, entry.directory, online = entry is ShelfEntry.Online, hiddenOnHome = hiddenOnHome, bind = { cover ->
+        when {
+            !entry.directory -> bindBookCover(entry, cover, localCovers, onlineCovers)
+            entry is ShelfEntry.Local -> localCovers.add(ShelfCovers.Target.Directory(entry.item.location) { faces ->
+                if (faces.isEmpty()) cover.showCoverTitle(entry.displayTitle) else cover.showCoverMosaic(faces)
+            })
+            entry is ShelfEntry.Online -> {
+                val group = entry.entry as WeReadEntry.Group
+                val books = group.books.map(ShelfEntry::Online).orderedOnShelf(sort, emptyMap(), onlineOpened).take(4)
+                    .map { it.entry as WeReadEntry.Book }
+                val faces = books.map { ShelfCovers.Face(it.name, null) }.toMutableList()
+                if (faces.isNotEmpty()) cover.showCoverMosaic(faces, fileNames = false)
+                for ((index, book) in books.withIndex()) {
+                    onlineCovers.add(WeReadCovers.Target(book) { bitmap ->
+                        faces[index] = ShelfCovers.Face(book.name, bitmap)
+                        cover.showCoverMosaic(faces, fileNames = false)
+                    })
                 }
             }
-        }) { openShelfEntry(entry) }
-    }).apply { bookVisibilityAction(entry, hiddenOnHome) }
+        }
+    }) { openShelfEntry(entry) }.apply { bookVisibilityAction(entry, hiddenOnHome) }
 
-    private fun localShelfTile(item: FolderItem, coverTargets: MutableList<ShelfCovers.Target>, hiddenOnHome: Boolean): View {
-        val name = item.location.name
-        val stem = name.substringBeforeLast('.')
-        val extension = item.extension
-        val hasSuffix = extension.length in 1..8 && extension.all { it in 'a'..'z' || it in '0'..'9' }
-        val displayName = if (!item.isDirectory && stem.isNotBlank() && hasSuffix) stem else name
-        return coverTile(displayName, item.isDirectory, hiddenOnHome = hiddenOnHome, bind = { cover ->
-            if (item.isDirectory) {
-                coverTargets.add(ShelfCovers.Target.Directory(item.location) { faces ->
-                    if (faces.isEmpty()) cover.showCoverTitle(displayName) else cover.showCoverMosaic(faces)
-                })
-            } else if (item.coverFormat != null) {
-                coverTargets.add(ShelfCovers.Target.File(item) { cover.showCoverBitmap(it) })
+    private fun resumeCover(
+        book: ShelfEntry, localCovers: MutableList<ShelfCovers.Target>, onlineCovers: MutableList<WeReadCovers.Target>,
+    ): View = CoverFrame().apply {
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        val artwork = FrameLayout(context).apply { showCoverTitle(book.displayTitle, compact = true) }
+        addView(artwork, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        bindBookCover(book, artwork, localCovers, onlineCovers)
+    }
+
+    private fun bindBookCover(
+        book: ShelfEntry, artwork: FrameLayout,
+        localCovers: MutableList<ShelfCovers.Target>, onlineCovers: MutableList<WeReadCovers.Target>,
+    ) {
+        when (book) {
+            is ShelfEntry.Local -> if (book.item.coverFormat != null) {
+                localCovers.add(ShelfCovers.Target.File(book.item) { artwork.showCoverBitmap(it) })
             }
-        }) { openFolderItem(item) }
+            is ShelfEntry.Online -> (book.entry as? WeReadEntry.Book)?.let { entry ->
+                onlineCovers.add(WeReadCovers.Target(entry) { artwork.showCoverBitmap(it) })
+            }
+        }
     }
 
     private fun coverTile(
@@ -965,12 +839,6 @@ class InkActivity : Activity() {
                 }, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
             }
         }, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-    }
-
-    private fun LinearLayout.folderNotice(message: String) {
-        addView(label(message, ACTION_TEXT_SP, tone = SOFT_INK).apply {
-            setPadding(0, dp(HEADING_GAP_DP), 0, dp(HEADING_GAP_DP))
-        }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
     }
 
     private fun navigateFolder(trail: List<FolderLocation>) {
@@ -1233,35 +1101,6 @@ class InkActivity : Activity() {
         }
     }.apply { contentDescription = "微信读书登录二维码" }
 
-    private fun appIcon(item: AppEntry, large: Boolean = false): View {
-        val glyph = when {
-            item.stockHome -> InkGlyph.Kind.HOME
-            item.isFileManager -> InkGlyph.Kind.FILE
-            item.isWeRead -> InkGlyph.Kind.BOOK
-            item.isAndroidSettings || item.isDeviceSettings -> InkGlyph.Kind.SETTINGS
-            else -> null
-        }
-        val glyphSize = if (large) 33 else 22
-        if (glyph != null) return InkGlyph(this, glyph, sizeDp = glyphSize)
-        val icon = catalog.icon(item) ?: return InkGlyph(this, InkGlyph.Kind.APP, sizeDp = glyphSize)
-        return ImageView(this).apply {
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            setPadding(dp(3), dp(3), dp(3), dp(3))
-            setImageDrawable(icon)
-            colorFilter = grayscale
-        }
-    }
-
-    private fun appRow(item: AppEntry, pinned: Boolean): View {
-        val name = displayLabel(item)
-        val badge = if (page == LauncherPage.APPS && pinned) InkGlyph.Kind.PIN else null
-        return PaperRow(this, name, appIcon(item), InkGlyph.Kind.ARROW, badge).apply {
-            if (badge != null) contentDescription = "$name，已固定"
-            appAction(item, pinned)
-        }
-    }
-
     private fun View.appAction(item: AppEntry, pinned: Boolean, stroke: Int = Color.TRANSPARENT) {
         action(stroke) { openApp(item) }
         confirmOnLongPress(if (pinned) "取消固定" else "固定到首页") { confirmPin(item) }
@@ -1334,18 +1173,6 @@ class InkActivity : Activity() {
             if (enabled) action(click = click)
             buttonRole()
         }
-
-    private fun View.buttonRole(longAction: String? = null) {
-        accessibilityDelegate = object : View.AccessibilityDelegate() {
-            override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfo) {
-                super.onInitializeAccessibilityNodeInfo(host, info)
-                info.className = "android.widget.Button"
-                if (longAction != null) info.addAction(AccessibilityNodeInfo.AccessibilityAction(
-                    AccessibilityNodeInfo.ACTION_LONG_CLICK, longAction,
-                ))
-            }
-        }
-    }
 
     private fun footer(pages: List<LauncherPage>) = column().apply {
         setPadding(dp(PAGE_INSET_DP), 0, dp(PAGE_INSET_DP), dp(4))

@@ -13,7 +13,7 @@ internal class InkGlyph(
     private val sizeDp: Int = 22,
     tone: Int = INK,
 ) : View(context) {
-    enum class Kind { APP, HOME, FILE, DOCUMENT, BOOK, WALLPAPER, SETTINGS, SORT, REFRESH, PIN, EYE_OFF, ARROW, LEFT, RIGHT }
+    enum class Kind { APP, HOME, FILE, BOOK, WALLPAPER, SETTINGS, SORT, REFRESH, PIN, EYE_OFF, ARROW, LEFT, RIGHT }
 
     private val pen = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = tone
@@ -46,12 +46,6 @@ internal class InkGlyph(
                 stroke(canvas, 3, 18, 3, 6, 9, 6, 11, 8, 20, 8, 20, 11)
                 stroke(canvas, 3, 18, 6, 11, 22, 11, 19, 19, 4, 19, 3, 18)
                 canvas.drawLine(8f, 15f, 12f, 15f, pen)
-            }
-            Kind.DOCUMENT -> {
-                stroke(canvas, 5, 3, 14, 3, 19, 8, 19, 21, 5, 21, 5, 3)
-                stroke(canvas, 14, 3, 14, 8, 19, 8)
-                canvas.drawLine(8f, 12f, 16f, 12f, pen)
-                canvas.drawLine(8f, 16f, 14f, 16f, pen)
             }
             Kind.BOOK -> {
                 path.rewind()

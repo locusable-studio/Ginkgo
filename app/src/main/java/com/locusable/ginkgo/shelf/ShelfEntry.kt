@@ -30,6 +30,16 @@ internal sealed interface ShelfEntry {
     }
 }
 
+/** Strip a local book's file suffix when displaying its title. */
+internal val ShelfEntry.displayTitle: String
+    get() {
+        val local = (this as? ShelfEntry.Local)?.item ?: return name
+        if (local.isDirectory) return name
+        val stem = name.substringBeforeLast('.')
+        val hasSuffix = local.extension.length in 1..8 && local.extension.all { it in 'a'..'z' || it in '0'..'9' }
+        return if (stem.isNotBlank() && hasSuffix) stem else name
+    }
+
 private fun WeReadEntry.Book.openedAt(opened: Map<String, Long>): Long {
     // Compare service timestamps and launcher timestamps on the same epoch-millisecond scale.
     val serverTime = if (readAt in 1L until 100_000_000_000L) readAt * 1000 else readAt

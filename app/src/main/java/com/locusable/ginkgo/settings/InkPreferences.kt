@@ -55,18 +55,6 @@ internal class InkPreferences(context: Context) {
         get() = prefs.getBoolean("show_about_tab", true)
         set(value) { prefs.edit().putBoolean("show_about_tab", value).apply() }
 
-    var homeGrid: Boolean
-        get() = prefs.getBoolean("home_grid", false)
-        set(value) { prefs.edit().putBoolean("home_grid", value).apply() }
-
-    var appsGrid: Boolean
-        get() = prefs.getBoolean("apps_grid", false)
-        set(value) { prefs.edit().putBoolean("apps_grid", value).apply() }
-
-    var shelfGrid: Boolean
-        get() = prefs.getBoolean("shelf_grid", prefs.getBoolean("folder_shelf", prefs.getBoolean("weread_shelf", false)))
-        set(value) { prefs.edit().putBoolean("shelf_grid", value).apply() }
-
     var shelfSort: ShelfSort
         get() {
             val saved = prefs.getString("shelf_sort", null) ?: prefs.getString("folder_sort", null)
