@@ -89,6 +89,8 @@ internal class AppCatalog(private val context: Context) {
     }
 }
 
+internal data class ShelfSources(val local: Boolean, val weRead: Boolean)
+
 internal class InkPreferences(context: Context) {
     private val prefs = context.getSharedPreferences("ink", Context.MODE_PRIVATE)
     private val folderOpens by lazy { context.getSharedPreferences("folder_open_times", Context.MODE_PRIVATE) }
@@ -120,6 +122,12 @@ internal class InkPreferences(context: Context) {
         get() = prefs.getBoolean("show_shelf_tab",
             prefs.getBoolean("show_folder_tab", true) || prefs.getBoolean("show_weread_tab", true))
         set(value) { prefs.edit().putBoolean("show_shelf_tab", value).apply() }
+
+    var shelfSources: ShelfSources
+        get() = ShelfSources(prefs.getBoolean("shelf_source_local", true), prefs.getBoolean("shelf_source_weread", true))
+        set(value) {
+            prefs.edit().putBoolean("shelf_source_local", value.local).putBoolean("shelf_source_weread", value.weRead).apply()
+        }
 
     var showAboutTab: Boolean
         get() = prefs.getBoolean("show_about_tab", true)

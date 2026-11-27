@@ -106,6 +106,7 @@ class InkActivity : Activity() {
     private var recentLocalRequest = 0
     private var renderedRecentBooks = emptyList<ShelfEntry>()
     private var renderedHiddenBooks: HiddenBooks? = null
+    private var renderedShelfSources: ShelfSources? = null
     private var renderedOnlineCovers = emptyList<WeReadCovers.Target>()
     private val weReadChanged: () -> Unit = {
         val current = weRead.snapshot
@@ -125,7 +126,8 @@ class InkActivity : Activity() {
             } else if (previous?.session?.cookies != current.session?.cookies) {
                 bindOnlineCovers()
             }
-        } else if (previous?.shelf != current.shelf || previous?.session != current.session || (loaded && page == Page.SHELF)) {
+        } else if ((page != Page.SHELF || prefs.shelfSources.weRead) &&
+            (previous?.shelf != current.shelf || previous?.session != current.session || (loaded && page == Page.SHELF))) {
             render(scrollY = body?.scrollY ?: 0)
         }
         loginDialog?.let(::updateWeReadLoginDialog)
@@ -220,7 +222,8 @@ class InkActivity : Activity() {
         }
         // Xiaomi may retain a HOME task and a separate launcher-entry task in the same process.
         if (body == null || renderedPages != visiblePages || apps != current || page == Page.SETTINGS ||
-            (page == Page.SHELF && (shelfOrderDirty || renderedHiddenBooks != prefs.hiddenBooks(weRead.snapshot.account))) ||
+            (page == Page.SHELF && (shelfOrderDirty || renderedShelfSources != prefs.shelfSources ||
+                renderedHiddenBooks != prefs.hiddenBooks(weRead.snapshot.account))) ||
             (page == Page.HOME && renderedRecentBooks != homeBooks())) {
             apps = current
             render(scrollY = body?.scrollY ?: 0)
@@ -249,8 +252,8 @@ class InkActivity : Activity() {
     private fun refreshShelf() {
         if (page != Page.SHELF || !resumed || isDestroyed) return
         if (weReadGroup == null) reloadFolder()
-        weRead.whenLoaded {
-            if (page == Page.SHELF && resumed && !isDestroyed) weRead.sync()
+        if (prefs.shelfSources.weRead) weRead.whenLoaded {
+            if (page == Page.SHELF && resumed && !isDestroyed && prefs.shelfSources.weRead) weRead.sync()
         }
     }
 
@@ -482,9 +485,20 @@ class InkActivity : Activity() {
         localCovers: MutableList<ShelfCovers.Target>, onlineCovers: MutableList<WeReadCovers.Target>,
         sort: FolderSort, opened: Map<String, Long>, onlineOpened: Map<String, Long>,
     ) = with(content) {
+        val sources = prefs.shelfSources
+        if (sources != renderedShelfSources) {
+            shelfPage = 0
+            renderedShelfSources = sources
+            if (!sources.local) {
+                folderTrail = emptyList()
+                folderContents = FolderContents.Loading
+                folderRequest++
+            }
+            if (!sources.weRead) weReadGroup = null
+        }
         val trail = folderTrail
         val snapshot = weRead.snapshot
-        val cloudShelf = snapshot.shelf
+        val cloudShelf = snapshot.shelf.takeIf { sources.weRead }
         val hidden = prefs.hiddenBooks(snapshot.account)
         renderedHiddenBooks = hidden
         val group = cloudShelf?.groups?.firstOrNull { it.id == weReadGroup }
@@ -505,31 +519,34 @@ class InkActivity : Activity() {
             shelfPage = 0
             render()
         }
-        val local = folderContents
+        val local = folderContents.takeIf { sources.local && group == null }
         val entries = buildList {
-            if (group == null) {
-                (local as? FolderContents.Items)?.entries?.forEach { add(ShelfEntry.Local(it)) }
-            }
+            (local as? FolderContents.Items)?.entries?.forEach { add(ShelfEntry.Local(it)) }
             if (folder == null) {
                 (group?.books ?: cloudShelf?.root).orEmpty().forEach { add(ShelfEntry.Online(it)) }
             }
         }.orderedOnShelf(sort, opened, onlineOpened, hidden)
-        collectionHeader(group?.name ?: folder?.name ?: Page.SHELF.title, accessory = sorting, leading = back)
-        if (group == null && local == FolderContents.PermissionRequired) {
+        val hasSource = sources.local || sources.weRead
+        collectionHeader(group?.name ?: folder?.name ?: Page.SHELF.title,
+            accessory = sorting.takeIf { hasSource }, leading = back)
+        if (local == FolderContents.PermissionRequired) {
             addView(this@InkActivity.paperButton("允许读取本地图书", primary = false) { requestBooksPermission() },
                 LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
         }
         if (entries.isEmpty()) {
+            val loading = local == FolderContents.Loading ||
+                (sources.weRead && folder == null && group == null && weRead.state == WeReadController.State.LOADING)
             val message = when {
+                !hasSource -> "未开启书架来源"
                 group != null -> "这个文件夹没有书籍"
-                local == FolderContents.Loading || (folder == null && weRead.state == WeReadController.State.LOADING) -> "正在读取书架…"
+                loading -> "正在读取书架…"
                 local == FolderContents.PermissionRequired -> null
                 local == FolderContents.Unavailable && folder != null -> "无法读取此目录"
                 folder != null -> "这个目录没有书籍"
                 else -> "书架上还没有书籍"
             }
             message?.let { folderNotice(it) }
-            if (local != FolderContents.Loading && weRead.state != WeReadController.State.LOADING) shelfPage = 0
+            if (!loading) shelfPage = 0
             updatePager(pager, 0, 1) {}
             return@with
         }
@@ -925,6 +942,7 @@ class InkActivity : Activity() {
     }
 
     private fun reloadFolder() {
+        if (!prefs.shelfSources.local) return
         val location = folderTrail.lastOrNull()
         val request = ++folderRequest
         val gate = when {
@@ -939,7 +957,7 @@ class InkActivity : Activity() {
         folderWorker.execute {
             val result = FolderAccess.contents(location)
             runOnUiThread {
-                if (request == folderRequest && !isDestroyed) updateFolder(result)
+                if (request == folderRequest && !isDestroyed && prefs.shelfSources.local) updateFolder(result)
             }
         }
     }
@@ -1050,6 +1068,18 @@ class InkActivity : Activity() {
             prefs.shelfGrid = it
             shelfPage = 0
         }
+        gap(SECTION_GAP_DP)
+        section("书架来源", "")
+        gap(4)
+        val sources = prefs.shelfSources
+        tileRows(listOf(
+            visibilityOption("本地书架", sources.local) { checked ->
+                prefs.shelfSources = prefs.shelfSources.copy(local = checked)
+            },
+            visibilityOption("微信读书", sources.weRead) { checked ->
+                prefs.shelfSources = prefs.shelfSources.copy(weRead = checked)
+            },
+        ), 2, rowGap = 0) { it }
         gap(SECTION_GAP_DP)
         section("账号", "")
         folderRow("微信读书", InkGlyph.Kind.BOOK, InkGlyph.Kind.RIGHT, ::manageWeReadAccount)
