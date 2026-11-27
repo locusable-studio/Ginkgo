@@ -7,8 +7,7 @@ project=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 apk_dir="$project/app/build/outputs/apk/release"
 unsigned="$apk_dir/app-release-unsigned.apk"
 output="$apk_dir/app-release.apk"
-key_dir="$HOME/Documents/Ginkgo签名"
-keystore="$key_dir/ginkgo-release.p12"
+keystore=${GINKGO_KEYSTORE:-}
 
 if [ ! -t 0 ] || [ ! -t 1 ]; then
     printf '%s\n' 'Run this script in a local Mac Terminal window for secure password prompts.' >&2
@@ -25,17 +24,19 @@ sdk=${ANDROID_HOME:-"$HOME/Library/Android/sdk"}
 build_tools="$sdk/build-tools/${BUILD_TOOLS_VERSION:-36.0.0}"
 test -x "$build_tools/apksigner"
 
-if [ ! -e "$keystore" ]; then
-    mkdir -p "$key_dir"
-    "$JAVA_HOME/bin/keytool" -genkeypair -keystore "$keystore" -storetype PKCS12 \
-        -alias ginkgo -keyalg RSA -keysize 3072 -sigalg SHA256withRSA \
-        -validity 10950 -dname 'CN=Locusable Studio'
+if [ ! -f "$keystore" ]; then
+    printf '%s\n' 'Set GINKGO_KEYSTORE to your existing Ginkgo release keystore.' >&2
+    exit 1
 fi
 
 staging=$(mktemp -d "$apk_dir/.sign.XXXXXX")
 trap 'rm -f "$staging/app-release.apk"; rmdir "$staging"' 0
-"$build_tools/apksigner" sign --ks "$keystore" --ks-key-alias ginkgo \
+"$build_tools/apksigner" sign --ks "$keystore" --ks-type PKCS12 --ks-key-alias ginkgo \
     --v4-signing-enabled false --out "$staging/app-release.apk" "$unsigned"
-"$build_tools/apksigner" verify --print-certs "$staging/app-release.apk"
+certificate=$("$build_tools/apksigner" verify --print-certs "$staging/app-release.apk")
+if ! printf '%s\n' "$certificate" | grep -Fxq 'Signer #1 certificate SHA-256 digest: 86edb3c85b94e869a90336cd683dcd7ddd38f3e2efcb39d9be6f0cfcf87a5bb3'; then
+    printf '%s\n' 'The APK was not signed with the existing Ginkgo release certificate.' >&2
+    exit 1
+fi
 mv "$staging/app-release.apk" "$output"
 printf 'Signed release: %s\n' "$output"

@@ -1,12 +1,12 @@
 # Ginkgo
 
 [![Android Build](https://github.com/locusable-studio/Ginkgo/actions/workflows/android-release.yml/badge.svg?branch=main)](https://github.com/locusable-studio/Ginkgo/actions/workflows/android-release.yml)
-![App version 0.4.56](assets/badges/version.svg)
+![App version](assets/badges/version.svg)
 ![Android 8.1](assets/badges/android.svg)
 
 An e-ink launcher for the first-generation Xiaomi MiReader (Android 8.1).
 
-[**Download Ginkgo 0.4.56 (APK)**](https://github.com/locusable-studio/Ginkgo/releases/download/v0.4.56/Ginkgo-0.4.56.apk) · [Latest release](https://github.com/locusable-studio/Ginkgo/releases/latest)
+[**Download the latest APK**](https://github.com/locusable-studio/Ginkgo/releases/latest)
 
 ## Screenshots
 
@@ -32,8 +32,10 @@ Ginkgo brings local and WeRead books into one shelf. Tapping a book opens the or
 
 ## Installation
 
-Install the Ginkgo APK, then select Ginkgo when prompted to choose a launcher.
+Download the APK from the latest release’s **Assets**, install it, then select Ginkgo when prompted to choose a launcher.
 
----
+## License
 
-Made by Locusable Studio.
+Copyright © 2026 Locusable Studio. Ginkgo's source code is released under the [MIT License](LICENSE).
+
+Third-party artwork and trademarks shown in the screenshots are not covered by this license.

@@ -1,19 +1,24 @@
-# Android and Gradle build output
+# Android and Gradle build output (keep the Gradle Wrapper under gradle/wrapper/)
 .gradle/
 .kotlin/
 build/
 .cxx/
 .externalNativeBuild/
+/dist/
 *.apk
 *.aab
 *.apks
 *.idsig
+*.hprof
+hs_err_pid*.log
 
-# Machine-local settings and generated screenshots
+# Developer machine, IDE, and generated previews
 local.properties
 .idea/
+.vscode/
 *.iml
-.claude/settings.local.json
+/.claude/settings.local.json
+/.claude/worktrees/
 captures/
 /preview/
 .DS_Store
@@ -24,6 +29,13 @@ Thumbs.db
 *.keystore
 *.p12
 *.pfx
+*.p8
+*.key
+*.pem
+*.p12.b64
+*.p12.base64
+*.keystore.b64
+*.keystore.base64
 keystore.properties
 signing.properties
 store-password.txt
