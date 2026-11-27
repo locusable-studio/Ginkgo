@@ -106,11 +106,16 @@ jobs:
             echo 'Refusing to publish a debuggable APK.' >&2
             exit 1
           fi
+          sha256=$(sha256sum "$apk" | cut -d ' ' -f 1)
+          apk_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/Ginkgo-$version.apk"
+          jq -n --argjson versionCode "$code" --arg versionName "$version" \
+            --arg apkUrl "$apk_url" --arg sha256 "$sha256" \
+            '{versionCode: $versionCode, versionName: $versionName, apkUrl: $apkUrl, sha256: $sha256}' > dist/update.json
       - name: Publish the tagged release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="$GITHUB_REF_NAME"
           version=${tag#v}
-          gh release create "$tag" "dist/Ginkgo-$version.apk" --repo "$GITHUB_REPOSITORY" \
+          gh release create "$tag" "dist/Ginkgo-$version.apk" dist/update.json --repo "$GITHUB_REPOSITORY" \
             --verify-tag --title "Ginkgo $version" --notes-file ".github/release-notes/$tag.md"

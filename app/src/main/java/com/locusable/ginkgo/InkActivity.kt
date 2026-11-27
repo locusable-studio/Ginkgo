@@ -99,6 +99,7 @@ import com.locusable.ginkgo.ui.pressBackground
 import com.locusable.ginkgo.ui.rule
 import com.locusable.ginkgo.ui.showPaperDialog
 import com.locusable.ginkgo.ui.tileRows
+import com.locusable.ginkgo.update.UpdateFlow
 import com.locusable.ginkgo.wallpaper.ShelfWallpaper
 import java.io.File
 import java.util.concurrent.Executors
@@ -117,11 +118,13 @@ class InkActivity : Activity() {
     }
 
     private val prefs by lazy { InkPreferences(this) }
+    private val updateFlow = lazy { UpdateFlow(this) }
     private val settingsPage by lazy {
         SettingsPage(this, prefs,
             onTabsChanged = { render(scrollY = body?.scrollY ?: 0) },
             openWeReadAccount = ::manageWeReadAccount,
             exportWallpaper = ::requestWallpaperExport,
+            checkUpdate = { updateFlow.value.check() },
         )
     }
     private val catalog by lazy { AppCatalog(this) }
@@ -206,6 +209,9 @@ class InkActivity : Activity() {
         val tab = savedInstanceState?.getInt("page", 0) ?: 0
         page = LauncherPage.entries.getOrElse(tab) { LauncherPage.HOME }.takeIf { it in visiblePages } ?: LauncherPage.HOME
         appPage = savedInstanceState?.getInt("app_page", 0) ?: 0
+        if (page == LauncherPage.SETTINGS) savedInstanceState?.getString("update_apk")?.let {
+            updateFlow.value.awaitingPermission = it
+        }
     }
 
     override fun onResume() {
@@ -224,7 +230,13 @@ class InkActivity : Activity() {
         }
     }
 
+    override fun onPostResume() {
+        super.onPostResume()
+        if (page == LauncherPage.SETTINGS && updateFlow.isInitialized()) updateFlow.value.resume()
+    }
+
     override fun onDestroy() {
+        if (updateFlow.isInitialized()) updateFlow.value.close()
         homeEditDialog?.dismiss()
         loginDialog?.dismiss()
         cancelWallpaperExport()
@@ -238,6 +250,7 @@ class InkActivity : Activity() {
     }
 
     override fun onPause() {
+        if (updateFlow.isInitialized()) updateFlow.value.pause()
         pendingBook = null
         resumed = false
         loginDialog?.dismiss()
@@ -251,6 +264,10 @@ class InkActivity : Activity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.hasCategory(Intent.CATEGORY_HOME)) {
+            if (updateFlow.isInitialized()) {
+                updateFlow.value.pause()
+                updateFlow.value.awaitingPermission = null
+            }
             homeEditDialog?.dismiss()
             loginDialog?.dismiss()
             cancelWallpaperExport()
@@ -262,6 +279,7 @@ class InkActivity : Activity() {
         super.onSaveInstanceState(outState)
         outState.putInt("page", page.ordinal)
         outState.putInt("app_page", appPage)
+        if (updateFlow.isInitialized()) outState.putString("update_apk", updateFlow.value.awaitingPermission)
     }
 
     @Deprecated("Android 8.1 uses key-based navigation")

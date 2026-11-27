@@ -34,6 +34,8 @@ Ginkgo brings local and WeRead books into one shelf. Tapping a book opens the or
 
 Download the APK from the latest release’s **Assets**, install it, then select Ginkgo when prompted to choose a launcher.
 
+After installation, use **Settings → Tools → Check for updates** to check for a newer release.
+
 ## License
 
 Copyright © 2026 Locusable Studio. Ginkgo's source code is released under the [MIT License](LICENSE).

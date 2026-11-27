@@ -32,6 +32,7 @@ internal class SettingsPage(
     private val onTabsChanged: () -> Unit,
     private val openWeReadAccount: () -> Unit,
     private val exportWallpaper: () -> Unit,
+    private val checkUpdate: () -> Unit,
 ) {
     fun render(content: LinearLayout) = with(content) {
         title("设置")
@@ -75,6 +76,7 @@ internal class SettingsPage(
         gap(SECTION_GAP_DP)
         section("工具", "")
         folderRow("导出书架壁纸", InkGlyph.Kind.WALLPAPER, InkGlyph.Kind.ARROW, exportWallpaper)
+        folderRow("检查更新", InkGlyph.Kind.REFRESH, InkGlyph.Kind.RIGHT, checkUpdate)
     }
 
     private fun visibilityOption(name: String, checked: Boolean, enabled: Boolean = true, onToggle: ((Boolean) -> Unit)? = null) = context.horizontal().apply {
