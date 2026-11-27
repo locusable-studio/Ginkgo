@@ -6,9 +6,22 @@
 
 An e-ink launcher for the first-generation Xiaomi MiReader (Android 8.1).
 
-<p align="center">
-  <img src="docs/screenshots/home.png" width="280" alt="Ginkgo home screen">
-</p>
+[**Download Ginkgo 0.4.56 (APK)**](https://github.com/locusable-studio/Ginkgo/releases/download/v0.4.56/Ginkgo-0.4.56.apk) · [Latest release](https://github.com/locusable-studio/Ginkgo/releases/latest)
+
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/home.png" width="200" alt="Home"><br>Home</td>
+    <td align="center"><img src="docs/screenshots/apps.png" width="200" alt="Apps"><br>Apps</td>
+    <td align="center"><img src="docs/screenshots/shelf.png" width="200" alt="Bookshelf"><br>Bookshelf</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/settings.png" width="200" alt="Settings"><br>Settings</td>
+    <td align="center"><img src="docs/screenshots/about.png" width="200" alt="About"><br>About</td>
+    <td align="center"><img src="docs/screenshots/wallpaper.png" width="200" alt="Cover wallpaper"><br>Cover wallpaper</td>
+  </tr>
+</table>
 
 ## Bookshelf
 
