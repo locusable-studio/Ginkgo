@@ -62,7 +62,15 @@ internal fun Activity.showPaperDialog(
     return dialog
 }
 
-internal fun Context.paperDialogPanel() = LinearLayout(this).apply {
+internal fun Context.paperDialogPanel(maxHeight: Int = 0): LinearLayout = object : LinearLayout(this) {
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val boundedHeight = if (maxHeight > 0 && (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED ||
+                MeasureSpec.getSize(heightMeasureSpec) > maxHeight)) {
+            MeasureSpec.makeMeasureSpec(maxHeight, MeasureSpec.AT_MOST)
+        } else heightMeasureSpec
+        super.onMeasure(widthMeasureSpec, boundedHeight)
+    }
+}.apply {
     orientation = LinearLayout.VERTICAL
     setPadding(dp(PAGE_INSET_DP), dp(SECTION_GAP_DP), dp(PAGE_INSET_DP), dp(SECTION_GAP_DP))
     background = paperShape(INK)

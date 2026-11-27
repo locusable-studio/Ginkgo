@@ -15,28 +15,29 @@ internal const val DISABLED_INK = 0xFF888888.toInt()
 internal const val LINE = 0xFFB0B0B0.toInt()
 internal const val PRESS_FILL = 0xFFF2F2F2.toInt()
 internal const val PAGE_INSET_DP = 24
-internal const val PAGE_TOP_DP = 18
+internal const val PAGE_TOP_DP = 12
 internal const val PAGE_BOTTOM_DP = 12
 internal const val HEADING_GAP_DP = 12
 internal const val SECTION_GAP_DP = 20
 internal const val ACTION_HEIGHT_DP = 48
 internal const val PAGE_TITLE_SP = 30f
 internal const val DIALOG_TITLE_SP = 21f
-internal const val ROW_TEXT_SP = 17f
+internal const val ROW_TEXT_SP = 16f
 internal const val ACTION_TEXT_SP = 15f
 internal const val LABEL_TEXT_SP = 14f
 internal const val CAPTION_TEXT_SP = 12f
 
 internal fun Context.dp(value: Int) = (value * resources.displayMetrics.density + 0.5f).toInt()
 
-internal fun Context.paperShape(stroke: Int, fill: Int = Color.WHITE) = GradientDrawable().apply {
+internal fun Context.paperShape(stroke: Int, fill: Int = Color.WHITE, strokeDp: Int = 1) = GradientDrawable().apply {
     setColor(fill)
-    if (stroke != Color.TRANSPARENT) setStroke(dp(1).coerceAtLeast(1), stroke)
+    if (stroke != Color.TRANSPARENT) setStroke(dp(strokeDp).coerceAtLeast(1), stroke)
 }
 
 internal fun Context.pressBackground(stroke: Int = Color.TRANSPARENT) = StateListDrawable().apply {
+    addState(intArrayOf(android.R.attr.state_pressed, android.R.attr.state_focused), paperShape(INK, PRESS_FILL, strokeDp = 2))
     addState(intArrayOf(android.R.attr.state_pressed), paperShape(stroke, PRESS_FILL))
-    addState(intArrayOf(android.R.attr.state_focused), paperShape(INK))
+    addState(intArrayOf(android.R.attr.state_focused), paperShape(INK, strokeDp = 2))
     addState(intArrayOf(), paperShape(stroke))
 }
 
@@ -56,11 +57,12 @@ internal fun Context.paperButton(text: String, primary: Boolean, enabled: Boolea
     setTextColor(if (enabled) INK else DISABLED_INK)
     minWidth = dp(80)
     minHeight = dp(ACTION_HEIGHT_DP)
-    setPadding(dp(10), dp(7), dp(10), dp(7))
     stateListAnimator = null
     backgroundTintList = null
+    defaultFocusHighlightEnabled = false
     foreground = null
     background = if (enabled) pressBackground(if (primary) INK else LINE) else paperShape(LINE, PRESS_FILL)
+    setPaddingRelative(dp(12), dp(7), dp(12), dp(7))
     isEnabled = enabled
     isFocusable = enabled
     if (enabled) setOnClickListener { click() }

@@ -28,6 +28,7 @@ import org.xmlpull.v1.XmlPullParserException
 internal class ShelfCovers(private val context: Context) {
     sealed interface Target {
         data class File(val item: FolderItem, val display: (Bitmap) -> Unit) : Target
+        data class Author(val item: FolderItem, val display: (String) -> Unit) : Target
         data class Directory(val location: FolderLocation, val display: (List<Face>) -> Unit) : Target
     }
     data class Face(val name: String, val bitmap: Bitmap?)
@@ -37,12 +38,14 @@ internal class ShelfCovers(private val context: Context) {
         fun diskKey(): String? = if (modified > 0) "$edge:$format:$modified:$size:${location.id}" else null
     }
     private data class Preview(val bitmap: Bitmap?)
+    private data class Author(val name: String?)
     private data class MosaicKey(val location: String, val sort: ShelfSort, val openRevision: Int)
     private data class Mosaic(val items: List<FolderItem>, val faces: List<Face>)
 
     private val cache = object : LruCache<Key, Preview>(6 * 1024 * 1024) {
         override fun sizeOf(key: Key, value: Preview) = value.bitmap?.allocationByteCount ?: 512
     }
+    private val authors = LruCache<FolderItem, Author>(256)
     private val mosaics = object : LruCache<MosaicKey, Mosaic>(3 * 1024 * 1024) {
         override fun sizeOf(key: MosaicKey, value: Mosaic) =
             512 + value.faces.sumOf { it.bitmap?.allocationByteCount ?: 0 }
@@ -69,6 +72,11 @@ internal class ShelfCovers(private val context: Context) {
                 null
             }
         }
+        val pendingAuthors = targets.filterIsInstance<Target.Author>().filter { target ->
+            val hit = authors.get(target.item)
+            hit?.name?.let(target.display)
+            hit == null
+        }
         val directories = targets.filterIsInstance<Target.Directory>().map { directory ->
             val revision = if (sort == ShelfSort.LAST_OPENED) openRevision(directory.location) else 0
             val key = MosaicKey(directory.location.id, sort, revision)
@@ -76,12 +84,20 @@ internal class ShelfCovers(private val context: Context) {
             cached?.faces?.takeIf { it.isNotEmpty() }?.let(directory.display)
             Triple(directory, key, cached)
         }
-        if (files.isEmpty() && directories.isEmpty()) return
+        if (files.isEmpty() && pendingAuthors.isEmpty() && directories.isEmpty()) return
         batch = worker.submit {
             for ((key, display) in files) {
                 if (Thread.currentThread().isInterrupted) return@submit
                 val bitmap = load(key)
                 if (bitmap != null) main.post { if (request == generation) display(bitmap) }
+            }
+            for ((item, display) in pendingAuthors) {
+                if (Thread.currentThread().isInterrupted) return@submit
+                val author = authors.get(item) ?: readAuthor(item)?.also {
+                    if (Thread.currentThread().isInterrupted) return@submit
+                    authors.put(item, it)
+                }
+                author?.name?.let { name -> main.post { if (request == generation) display(name) } }
             }
             for ((directory, key, cached) in directories) {
                 if (Thread.currentThread().isInterrupted) return@submit
@@ -147,6 +163,16 @@ internal class ShelfCovers(private val context: Context) {
         null
     } catch (_: RuntimeException) {
         // Unreadable, protected, or no layout-safe cover; leave the file glyph visible.
+        null
+    }
+
+    private fun readAuthor(item: FolderItem): Author? = try {
+        FolderAccess.book(item.location)?.let { Author(epubAuthor(it)) }
+    } catch (_: IOException) {
+        null
+    } catch (_: XmlPullParserException) {
+        Author(null)
+    } catch (_: RuntimeException) {
         null
     }
 

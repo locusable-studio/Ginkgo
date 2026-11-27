@@ -18,11 +18,16 @@ internal class WeReadController private constructor(private val context: Context
         private set
     var snapshot = WeReadSnapshot()
         private set
+    var profile: WeReadWeb.Profile? = null
+        private set
     var qr: Array<BooleanArray>? = null
         private set
 
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
+    private val profileWorker by lazy { Executors.newSingleThreadExecutor() }
+    private var profileAccount: String? = null
+    private var profileRequest = 0
     private val store = WeReadStore(context)
     private val openHistory by lazy { WeReadOpenHistory(context) }
     private val observers = linkedSetOf<() -> Unit>()
@@ -61,6 +66,25 @@ internal class WeReadController private constructor(private val context: Context
     fun unobserve(listener: () -> Unit) {
         observers.remove(listener)
         if (observers.isEmpty() && state in LOGIN_STATES) stopLogin()
+    }
+
+    fun loadProfile() {
+        val session = snapshot.session ?: return
+        if (profileAccount == session.account) return
+        profileAccount = session.account
+        val request = ++profileRequest
+        profileWorker.execute {
+            val loaded = try { WeReadWeb.profile(session) } catch (_: Exception) { null }
+            main.post {
+                if (request != profileRequest || snapshot.session?.account != session.account) return@post
+                if (loaded == null) {
+                    profileAccount = null
+                } else {
+                    profile = loaded
+                    observers.toList().forEach { it() }
+                }
+            }
+        }
     }
 
     fun sync() {
@@ -207,6 +231,11 @@ internal class WeReadController private constructor(private val context: Context
     }
 
     private fun setState(value: State, message: Notice? = null) {
+        if (profileAccount != null && profileAccount != snapshot.session?.account) {
+            profileRequest++
+            profileAccount = null
+            profile = null
+        }
         state = value
         notice = message
         observers.toList().forEach { it() }

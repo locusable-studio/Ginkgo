@@ -16,26 +16,52 @@ private const val MAX_IMAGE = 12 * 1024 * 1024
 private val rasterExtensions = setOf("jpg", "jpeg", "png", "gif", "webp", "bmp")
 
 /** Reads EPUB metadata and one embedded image, without opening the book or extracting it to disk. */
-internal fun epubCover(file: File, decode: (ByteArray) -> Bitmap?): Bitmap? = ZipFile(file).use { zip ->
-    readEpubCover({ path, limit ->
-        zip.getEntry(path)?.takeUnless { it.isDirectory || it.size > limit }
-            ?.let { entry -> zip.getInputStream(entry).use { it.readBounded(limit) } }
-    }, decode)
+internal fun epubCover(file: File, decode: (ByteArray) -> Bitmap?): Bitmap? = withEpubMembers(file) { read ->
+    readEpubCover(read, decode)
+}
+
+internal fun epubAuthor(file: File): String? = withEpubMembers(file) { read ->
+    val (_, metadata) = readEpubPackage(read) ?: return@withEpubMembers null
+    val authors = mutableListOf<String>()
+    var inMetadata = false
+    elements(metadata, namespaces = true) { xml ->
+        if (xml.depth == 2) inMetadata = xml.name == "metadata"
+        if (inMetadata && xml.depth == 3 && xml.name == "creator" && xml.namespace == "http://purl.org/dc/elements/1.1/") {
+            val role = xml.attr("role")
+            xml.nextText().trim().takeIf { it.length in 1..256 && (role == null || role == "aut") }?.let { name ->
+                if (name !in authors && authors.size < 4) authors.add(name)
+            }
+        }
+    }
+    authors.joinToString("、").take(256).ifEmpty { null }
 }
 
 private typealias ReadMember = (String, Int) -> ByteArray?
+
+private inline fun <T> withEpubMembers(file: File, block: (ReadMember) -> T): T = ZipFile(file).use { zip ->
+    block { path, limit ->
+        zip.getEntry(path)?.takeUnless { it.isDirectory || it.size > limit }
+            ?.let { entry -> zip.getInputStream(entry).use { it.readBounded(limit) } }
+    }
+}
+
 private data class EpubItem(val id: String, val path: String, val type: String, val isCover: Boolean)
 
-private fun readEpubCover(read: ReadMember, decode: (ByteArray) -> Bitmap?): Bitmap? {
+private fun readEpubPackage(read: ReadMember): Pair<String, ByteArray>? {
     var opf: String? = null
     elements(read("META-INF/container.xml", MAX_XML) ?: return null) { xml ->
         if (xml.name == "rootfile" && opf == null) opf = archivePath("", xml.attr("full-path"))
     }
     val packagePath = opf ?: return null
+    return packagePath to (read(packagePath, MAX_XML) ?: return null)
+}
+
+private fun readEpubCover(read: ReadMember, decode: (ByteArray) -> Bitmap?): Bitmap? {
+    val (packagePath, metadata) = readEpubPackage(read) ?: return null
     val manifest = mutableListOf<EpubItem>()
     var coverId: String? = null
     var reference: String? = null
-    elements(read(packagePath, MAX_XML) ?: return null) { xml ->
+    elements(metadata) { xml ->
         when (xml.name) {
             "item" -> archivePath(packagePath, xml.attr("href"))?.let { path ->
                 val properties = xml.attr("properties").orEmpty().split(Regex("\\s+"))
@@ -99,8 +125,9 @@ private fun archivePath(base: String, href: String?): String? {
     return parts.joinToString("/").takeIf(String::isNotEmpty)
 }
 
-private inline fun elements(bytes: ByteArray, visit: (XmlPullParser) -> Unit) {
+private inline fun elements(bytes: ByteArray, namespaces: Boolean = false, visit: (XmlPullParser) -> Unit) {
     val xml = Xml.newPullParser().apply {
+        if (namespaces) setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true)
         setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false)
         setInput(bytes.inputStream(), null)
     }

@@ -4,13 +4,9 @@ import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import com.locusable.ginkgo.launcher.AppEntry
 import com.locusable.ginkgo.shelf.HiddenBooks
 import com.locusable.ginkgo.shelf.ShelfEntry
-import com.locusable.ginkgo.shelf.ShelfSort
 import com.locusable.ginkgo.shelf.local.FolderLocation
-
-internal const val MAX_PINS = 4
 
 internal data class ShelfSources(val local: Boolean, val weRead: Boolean)
 
@@ -52,23 +48,14 @@ internal class InkPreferences(context: Context) {
         }
 
     var showAboutTab: Boolean
-        get() = prefs.getBoolean("show_about_tab", true)
+        get() = prefs.getBoolean("show_about_tab", false)
         set(value) { prefs.edit().putBoolean("show_about_tab", value).apply() }
-
-    var shelfSort: ShelfSort
-        get() {
-            val saved = prefs.getString("shelf_sort", null) ?: prefs.getString("folder_sort", null)
-            val legacyRecent = prefs.getBoolean("folder_sort_by_opened", prefs.getBoolean("weread_sort_recent", false))
-            return ShelfSort.entries.firstOrNull { it.name == saved }
-                ?: if (legacyRecent) ShelfSort.LAST_OPENED else ShelfSort.NAME
-        }
-        set(value) { prefs.edit().putString("shelf_sort", value.name).apply() }
 
     fun folderOpenTimes(): Map<String, Long> = folderOpens.all.mapNotNull { (id, time) ->
         (time as? Long)?.let { id to it }
     }.toMap()
 
-    fun recordFolderOpen(location: FolderLocation) {
+    fun recordBookOpen(location: FolderLocation) {
         folderOpens.edit().putLong(location.id, System.currentTimeMillis()).apply()
     }
 
@@ -94,15 +81,5 @@ internal class InkPreferences(context: Context) {
 
     fun pinned() = prefs.getString("pins", "").orEmpty().lineSequence().filter { it.isNotEmpty() }.toList()
 
-    fun seedPins(apps: List<AppEntry>) {
-        if (prefs.contains("pins")) return
-        val base = listOfNotNull(
-            apps.firstOrNull { it.stockHome },
-            apps.firstOrNull { it.isFileManager },
-            apps.firstOrNull { it.isDeviceSettings } ?: apps.firstOrNull { it.isAndroidSettings },
-        )
-        savePins(base.map { it.key }.distinct())
-    }
-
-    fun savePins(keys: List<String>) = prefs.edit().putString("pins", keys.take(MAX_PINS).joinToString("\n")).apply()
+    fun savePins(keys: List<String>) = prefs.edit().putString("pins", keys.joinToString("\n")).apply()
 }

@@ -1,9 +1,12 @@
 package com.locusable.ginkgo.shelf.weread
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
+import java.net.URI
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
 import org.json.JSONObject
@@ -17,6 +20,7 @@ internal object WeReadWeb {
     class Rejected : IOException()
 
     class Session(val account: String, val cookies: Map<String, String>)
+    class Profile(val name: String?, val avatar: Bitmap?)
     class Login(val uid: String, val cookies: MutableMap<String, String>) {
         val confirmation get() = Uri.parse("$WEREAD_ORIGIN/web/confirm").buildUpon().appendQueryParameter("uid", uid).build().toString()
     }
@@ -72,6 +76,48 @@ internal object WeReadWeb {
         return WeReadShelf.parse(json, cached) to updated
     }
 
+    fun profile(session: Session): Profile? {
+        val path = "/api/userInfo?userVid=${Uri.encode(session.account)}"
+        val json = jsonRequest(path, session.cookies.toMutableMap(), timeout = 4_000, limit = 16 * 1024,
+            profileSession = session)
+        if (json.errorCode() != 0) return null
+        val name = (json.opt("name") as? String)?.trim()?.takeIf { it.length in 1..128 }
+        val avatar = json.value("avatar", 2048)?.let(::profileAvatar)
+        return if (name != null || avatar != null) Profile(name, avatar) else null
+    }
+
+    private val avatarHosts = setOf("wx.qlogo.cn", "thirdwx.qlogo.cn", "q.qlogo.cn", "rescdn.qqmail.com", "cdn.weread.qq.com")
+
+    private fun profileAvatar(source: String): Bitmap? {
+        return try {
+            val uri = URI(if (source.startsWith("//")) "https:$source" else source).normalize()
+            val host = uri.host?.lowercase() ?: return null
+            val path = uri.rawPath?.takeIf { it.isNotEmpty() } ?: return null
+            if (uri.scheme?.lowercase() !in setOf("http", "https") || uri.rawUserInfo != null || uri.port != -1) return null
+            if (host !in avatarHosts && !(host == "res.weread.qq.com" && path.startsWith("/wravatar/"))) return null
+            val connection = URI("https:${uri.rawSchemeSpecificPart}").toURL().openConnection() as HttpsURLConnection
+            val bytes = try {
+                connection.instanceFollowRedirects = false
+                connection.useCaches = false
+                connection.connectTimeout = 3_000
+                connection.readTimeout = 3_000
+                if (connection.responseCode != 200) return null
+                connection.inputStream.use { it.readLimited(512 * 1024) }
+            } finally {
+                connection.disconnect()
+            }
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+            if (options.outWidth !in 1..4096 || options.outHeight !in 1..4096) return null
+            options.inJustDecodeBounds = false
+            options.inSampleSize = 1
+            while (maxOf(options.outWidth, options.outHeight) / options.inSampleSize > 96) options.inSampleSize *= 2
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     /** Metadata only, for uploaded books whose shelf row did not carry a usable cover. */
     fun uploadedBookCover(session: Session, bookId: String, timeout: Int = 5_000): String? {
         if (!bookId.isWeReadUploadId()) return null
@@ -106,7 +152,7 @@ internal object WeReadWeb {
 
     private fun jsonRequest(
         path: String, cookies: MutableMap<String, String>, body: String? = null,
-        timeout: Int = 15_000, limit: Int = 96 * 1024,
+        timeout: Int = 15_000, limit: Int = 96 * 1024, profileSession: Session? = null,
     ): JSONObject {
         val connection = URL(WEREAD_ORIGIN + path).openConnection() as HttpsURLConnection
         try {
@@ -117,6 +163,10 @@ internal object WeReadWeb {
             connection.setRequestProperty("Accept", "application/json, text/plain, */*")
             connection.setRequestProperty("Origin", WEREAD_ORIGIN)
             connection.setRequestProperty("Referer", "$WEREAD_ORIGIN/")
+            if (profileSession != null) {
+                connection.setRequestProperty("x-vid", profileSession.account)
+                connection.setRequestProperty("x-skey", profileSession.cookies.getValue("wr_skey"))
+            }
             if (cookies.isNotEmpty()) connection.setRequestProperty("Cookie", cookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
             if (body != null) {
                 val bytes = body.toByteArray(Charsets.UTF_8)

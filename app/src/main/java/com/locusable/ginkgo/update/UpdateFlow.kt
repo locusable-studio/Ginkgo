@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
+import android.util.AndroidRuntimeException
 import android.view.View
 import com.locusable.ginkgo.ui.showPaperDialog
 import java.io.File
@@ -22,24 +23,32 @@ internal class UpdateFlow(private val activity: Activity) {
     private var dialog: Dialog? = null
     var awaitingPermission: String? = null
 
+    private data class CheckedRelease(val release: ReleaseUpdate, val isNewer: Boolean, val cachedApk: File?)
+
     fun check() = task("正在检查更新", "正在读取 GitHub 上的正式发布。", "无法检查更新", "请检查网络连接后重试。", work = {
-        client.latest()?.let { it to client.installedCode() }
+        client.latest()?.let { release ->
+            val isNewer = release.versionCode > client.installedCode()
+            CheckedRelease(release, isNewer, if (isNewer) client.verifiedCachedApk(release) else null)
+        }
     }) { result ->
         when {
             result == null -> message("暂时无法检查更新", "当前正式发布尚未提供应用内更新信息。")
-            result.first.versionCode <= result.second -> message("已是最新版本", "当前没有可用的正式更新。")
-            else -> offer(result.first)
+            !result.isNewer -> message("已是最新版本", "当前没有可用的正式更新。")
+            else -> offer(result.release, result.cachedApk)
         }
     }
 
-    private fun offer(release: ReleaseUpdate) {
+    private fun offer(release: ReleaseUpdate, cachedApk: File?) {
         val notes = release.notes.lineSequence().map { it.trimEnd() }
             .filterNot { it.startsWith("# ") || it.startsWith("## ") }
             .joinToString("\n") { if (it.startsWith("- ")) "• ${it.removePrefix("- ")}" else it }
             .replace("**", "").trim()
         val version = "${release.versionName} (${release.versionCode})"
         val description = if (notes.isBlank()) version else "$version\n\n$notes"
-        dialog = activity.showPaperDialog("发现新版本", description, "下载更新") { download(release) }
+        val action = if (cachedApk == null) "下载更新" else "安装更新"
+        dialog = activity.showPaperDialog("发现新版本", description, action) {
+            if (cachedApk == null) download(release) else requestInstall(cachedApk)
+        }
     }
 
     private fun download(release: ReleaseUpdate) {
@@ -58,6 +67,10 @@ internal class UpdateFlow(private val activity: Activity) {
     }
 
     private fun requestInstall(apk: File) {
+        if (!apk.isFile) {
+            message("无法安装更新", "下载的 APK 已不可用，请重新检查更新。")
+            return
+        }
         if (activity.packageManager.canRequestPackageInstalls()) {
             install(apk)
             return
@@ -65,7 +78,10 @@ internal class UpdateFlow(private val activity: Activity) {
         dialog = activity.showPaperDialog("允许安装更新", "请在系统设置中允许 Ginkgo 安装应用，返回后即可继续。", "前往设置") {
             awaitingPermission = apk.name
             val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.fromParts("package", activity.packageName, null))
-            launch(intent) { awaitingPermission = null }
+            if (launchError(intent) != null) {
+                awaitingPermission = null
+                install(apk, afterSettingsFailure = true)
+            }
         }
     }
 
@@ -77,30 +93,33 @@ internal class UpdateFlow(private val activity: Activity) {
         if (apk == null) message("无法安装更新", "下载的 APK 已不可用，请重新检查更新。") else install(apk)
     }
 
-    private fun install(apk: File) {
+    private fun install(apk: File, afterSettingsFailure: Boolean = false) {
         val intent = Intent(Intent.ACTION_VIEW).setDataAndType(UpdateApks.uri(activity, apk), UPDATE_APK_MIME)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         @Suppress("DEPRECATION")
         val installer = activity.packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY or PackageManager.MATCH_SYSTEM_ONLY)
             .firstOrNull()?.activityInfo
-        if (installer == null) {
-            message("无法安装更新", "系统安装器不可用。")
-            return
+        val error = if (installer == null) {
+            "系统安装器不可用。"
+        } else {
+            intent.component = ComponentName(installer.packageName, installer.name)
+            launchError(intent)
         }
-        intent.component = ComponentName(installer.packageName, installer.name)
-        launch(intent)
+        if (error != null) {
+            val hint = if (afterSettingsFailure) "请在系统设置中手动授权，或安装官方发布的 APK。" else ""
+            message("无法安装更新", error + hint)
+        }
     }
 
-    private fun launch(intent: Intent, onFailure: () -> Unit = {}) {
-        try {
-            activity.startActivity(intent)
-        } catch (_: ActivityNotFoundException) {
-            onFailure()
-            message("无法安装更新", "系统安装界面不可用。")
-        } catch (_: SecurityException) {
-            onFailure()
-            message("无法安装更新", "系统没有允许 Ginkgo 安装应用。")
-        }
+    private fun launchError(intent: Intent): String? = try {
+        activity.startActivity(intent)
+        null
+    } catch (_: ActivityNotFoundException) {
+        "系统安装界面不可用。"
+    } catch (_: SecurityException) {
+        "系统没有允许 Ginkgo 安装应用。"
+    } catch (_: AndroidRuntimeException) {
+        "系统安装界面不可用。"
     }
 
     private fun message(title: String, text: String) {

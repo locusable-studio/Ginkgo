@@ -62,6 +62,24 @@ internal class ReleaseUpdateClient(private val context: Context) {
         return ReleaseUpdate(code, version, release.optString("body", "").take(1500), apkUrl, apkBytes, digest)
     }
 
+    fun verifiedCachedApk(release: ReleaseUpdate): File? {
+        return try {
+            val apk = UpdateApks.file(context, "${release.sha256}.apk") ?: return null
+            if (apk.length() != release.apkBytes) return null
+            val digest = MessageDigest.getInstance("SHA-256")
+            val bytes = apk.inputStream().use { stream ->
+                stream.readBounded(release.apkBytes) { buffer, length, _ -> digest.update(buffer, 0, length) }
+            }
+            if (bytes != release.apkBytes || digest.digest().toHexString() != release.sha256) return null
+            verifyArchive(apk, release)
+            check(!Thread.currentThread().isInterrupted)
+            apk
+        } catch (e: Exception) {
+            if (e is InterruptedException || Thread.currentThread().isInterrupted) throw e
+            null
+        }
+    }
+
     /** Reports 10% steps based on bytes written; 100% means transfer finished and verification started. */
     fun download(release: ReleaseUpdate, onProgress: (Int) -> Unit): File {
         check(release.versionCode > installedCode())
