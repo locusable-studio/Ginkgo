@@ -3,13 +3,11 @@ package com.locusable.ginkgo.ui.page
 import android.content.Context
 import android.graphics.Typeface
 import android.text.TextUtils
-import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.LinearLayout
-import android.widget.TextView
 import com.locusable.ginkgo.R
 import com.locusable.ginkgo.launcher.AppEntry
 import com.locusable.ginkgo.shelf.ShelfEntry
@@ -20,6 +18,7 @@ import com.locusable.ginkgo.ui.PAGE_INSET_DP
 import com.locusable.ginkgo.ui.SOFT_INK
 import com.locusable.ginkgo.ui.action
 import com.locusable.ginkgo.ui.buttonRole
+import com.locusable.ginkgo.ui.collectionHeader
 import com.locusable.ginkgo.ui.column
 import com.locusable.ginkgo.ui.dp
 import com.locusable.ginkgo.ui.gap
@@ -44,7 +43,13 @@ internal fun LinearLayout.showHome(
     pinnedAppTile: (AppEntry) -> View,
     openBook: (ShelfEntry) -> Unit,
 ) {
-    addView(context.homeWordmark(), LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+    val credit = context.label("by ${context.getString(R.string.app_developer)}", CAPTION_TEXT_SP, tone = SOFT_INK).apply {
+        gravity = Gravity.END or Gravity.CENTER_VERTICAL
+        maxLines = 1
+        ellipsize = TextUtils.TruncateAt.END
+        maxWidth = context.dp((resources.configuration.screenWidthDp - 2 * PAGE_INSET_DP) / 2)
+    }
+    collectionHeader(context.getString(R.string.app_name), accessory = credit)
     val featured = recentBooks.firstOrNull()
     if (featured != null) {
         gap(PAGE_INSET_DP)
@@ -88,29 +93,4 @@ private fun Context.resumeRow(book: ShelfEntry, cover: View, open: () -> Unit) =
     }, LinearLayout.LayoutParams(dp(29), dp(30)))
     buttonRole()
     action(click = open)
-}
-
-private fun Context.homeWordmark() = horizontal().apply {
-    gravity = Gravity.BOTTOM or Gravity.START
-    val available = (resources.displayMetrics.widthPixels - dp(62)).toFloat()
-    val byline = label("by ${getString(R.string.app_developer)}", 13f, tone = SOFT_INK).apply {
-        includeFontPadding = false
-        maxLines = 1
-        fitLineTo(available * 0.4f)
-    }
-    val name = label(getString(R.string.app_name), 54f, face = Typeface.create("serif", Typeface.NORMAL)).apply {
-        includeFontPadding = false
-        maxLines = 1
-        fitLineTo(available - byline.paint.measureText(byline.text.toString()))
-    }
-    addView(name, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
-    addView(byline, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
-        marginStart = dp(11)
-        bottomMargin = dp(9)
-    })
-}
-
-private fun TextView.fitLineTo(width: Float) {
-    val measured = paint.measureText(text.toString())
-    if (measured > width) setTextSize(TypedValue.COMPLEX_UNIT_PX, textSize * width.coerceAtLeast(1f) / measured)
 }

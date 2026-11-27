@@ -9,6 +9,7 @@ import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 
@@ -101,6 +102,35 @@ internal fun LinearLayout.notice(message: String) {
         setPadding(0, context.dp(HEADING_GAP_DP), 0, context.dp(HEADING_GAP_DP))
     }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
 }
+
+internal fun FrameLayout.updatePager(index: Int, total: Int, move: (Int) -> Unit) {
+    removeAllViews()
+    addView(context.horizontal().apply {
+        gravity = Gravity.CENTER
+        addView(context.pageButton("上一页", index > 0) { move(-1) }, LinearLayout.LayoutParams(WRAP_CONTENT, MATCH_PARENT))
+        addView(context.label("${index + 1}/$total", PAGER_TEXT_SP, tone = SOFT_INK).apply {
+            gravity = Gravity.CENTER
+            minimumWidth = context.dp(56)
+            setPadding(context.dp(8), 0, context.dp(8), 0)
+            maxLines = 1
+            contentDescription = "第 ${index + 1} 页，共 $total 页"
+        }, LinearLayout.LayoutParams(WRAP_CONTENT, MATCH_PARENT))
+        addView(context.pageButton("下一页", index + 1 < total) { move(1) }, LinearLayout.LayoutParams(WRAP_CONTENT, MATCH_PARENT))
+    }, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+}
+
+private const val PAGER_TEXT_SP = 13f
+
+private fun Context.pageButton(text: String, enabled: Boolean, click: () -> Unit) =
+    label(text, PAGER_TEXT_SP, tone = if (enabled) INK else DISABLED_INK).apply {
+        gravity = Gravity.CENTER
+        minimumWidth = dp(80)
+        setPadding(dp(10), 0, dp(10), 0)
+        maxLines = 1
+        isEnabled = enabled
+        if (enabled) action(click = click)
+        buttonRole()
+    }
 
 internal fun View.buttonRole(longAction: String? = null) {
     accessibilityDelegate = object : View.AccessibilityDelegate() {

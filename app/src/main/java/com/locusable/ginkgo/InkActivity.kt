@@ -24,7 +24,6 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-import android.view.ViewTreeObserver
 import android.view.WindowManager
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -60,7 +59,6 @@ import com.locusable.ginkgo.shelf.weread.WeReadSnapshot
 import com.locusable.ginkgo.ui.ACTION_HEIGHT_DP
 import com.locusable.ginkgo.ui.ACTION_TEXT_SP
 import com.locusable.ginkgo.ui.DIALOG_TITLE_SP
-import com.locusable.ginkgo.ui.DISABLED_INK
 import com.locusable.ginkgo.ui.HEADING_GAP_DP
 import com.locusable.ginkgo.ui.INK
 import com.locusable.ginkgo.ui.InkGlyph
@@ -72,22 +70,23 @@ import com.locusable.ginkgo.ui.PAGE_TOP_DP
 import com.locusable.ginkgo.ui.ROW_TEXT_SP
 import com.locusable.ginkgo.ui.SECTION_GAP_DP
 import com.locusable.ginkgo.ui.SOFT_INK
-import com.locusable.ginkgo.ui.TILE_ROW_GAP
 import com.locusable.ginkgo.ui.action
 import com.locusable.ginkgo.ui.bookTitlePreview
 import com.locusable.ginkgo.ui.buttonRole
-import com.locusable.ginkgo.ui.collectionHeader
 import com.locusable.ginkgo.ui.column
 import com.locusable.ginkgo.ui.dp
 import com.locusable.ginkgo.ui.gap
 import com.locusable.ginkgo.ui.horizontal
 import com.locusable.ginkgo.ui.label
-import com.locusable.ginkgo.ui.notice
 import com.locusable.ginkgo.ui.page.HOME_COLUMNS
 import com.locusable.ginkgo.ui.page.HOME_RECENT_BOOK_LIMIT
+import com.locusable.ginkgo.ui.page.SHELF_PAGE_SIZE
 import com.locusable.ginkgo.ui.page.SettingsPage
+import com.locusable.ginkgo.ui.page.ShelfPageModel
 import com.locusable.ginkgo.ui.page.showAbout
+import com.locusable.ginkgo.ui.page.showApps
 import com.locusable.ginkgo.ui.page.showHome
+import com.locusable.ginkgo.ui.page.showShelf
 import com.locusable.ginkgo.ui.paperButton
 import com.locusable.ginkgo.ui.paperDialog
 import com.locusable.ginkgo.ui.paperDialogContent
@@ -98,7 +97,6 @@ import com.locusable.ginkgo.ui.presentPaperDialog
 import com.locusable.ginkgo.ui.pressBackground
 import com.locusable.ginkgo.ui.rule
 import com.locusable.ginkgo.ui.showPaperDialog
-import com.locusable.ginkgo.ui.tileRows
 import com.locusable.ginkgo.update.UpdateFlow
 import com.locusable.ginkgo.wallpaper.ShelfWallpaper
 import java.io.File
@@ -110,10 +108,7 @@ class InkActivity : Activity() {
         const val READ_LOCAL_BOOKS = 111
         const val WRITE_WALLPAPER = 112
         const val MAX_HOME_BOOKS = 1 + HOME_RECENT_BOOK_LIMIT
-        const val APP_COLUMNS = 4
         const val APP_TILE_HEIGHT = 112
-        const val SHELF_COLUMNS = 4
-        const val PAGER_TEXT_SP = 13f
         const val COVER_OUTLINE = 0xFFC9C9C9.toInt()
     }
 
@@ -361,7 +356,8 @@ class InkActivity : Activity() {
         val onlineCoverTargets = mutableListOf<WeReadCovers.Target>()
         when (page) {
             LauncherPage.HOME -> fillHome(content, coverTargets, onlineCoverTargets, opened, onlineOpened)
-            LauncherPage.APPS -> fillApps(content, scroll)
+            LauncherPage.APPS -> content.showApps(scroll, apps, prefs.pinned().toSet(), appPage, appTileHeight(),
+                onPageChanged = { appPage = it }, tile = { app, pinned -> appTile(app, pinned) })
             LauncherPage.SHELF -> {
                 shelfOrderDirty = false
                 val pager = FrameLayout(this)
@@ -467,78 +463,11 @@ class InkActivity : Activity() {
         appAction(item, pinned)
     }
 
-    private fun fillApps(content: LinearLayout, scroll: ScrollView) = with(content) {
-        collectionHeader(LauncherPage.APPS.title)
-        if (apps.isEmpty()) {
-            notice("没有可启动的应用")
-            return@with
-        }
-        val rows = column().also { addView(it, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)) }
-        val pager = FrameLayout(this@InkActivity).apply { visibility = View.GONE }
-        addView(pager, LinearLayout.LayoutParams(MATCH_PARENT, dp(ACTION_HEIGHT_DP)))
-        val pinned = prefs.pinned().toSet()
-        val rowHeight = appTileHeight()
-        val rowStep = dp(rowHeight) + dp(TILE_ROW_GAP)
-        val rowCount = (apps.size - 1) / APP_COLUMNS + 1
-        var rowsPerPage = 0
-
-        fun showPage(index: Int) {
-            val pageSize = rowsPerPage * APP_COLUMNS
-            val total = (apps.size - 1) / pageSize + 1
-            appPage = index.coerceIn(0, total - 1)
-            val start = appPage * pageSize
-            rows.removeAllViews()
-            rows.tileRows(apps.subList(start, minOf(start + pageSize, apps.size)), APP_COLUMNS, rowHeight = rowHeight) { app ->
-                appTile(app, pinned = app.key in pinned)
-            }
-            if (total > 1) {
-                pager.visibility = View.VISIBLE
-                updatePager(pager, appPage, total) { step ->
-                    scroll.scrollTo(0, 0)
-                    showPage(appPage + step)
-                }
-            } else {
-                pager.visibility = View.GONE
-                pager.removeAllViews()
-            }
-        }
-
-        // Reserve inline pager space only if the grid cannot fit on one page.
-        val layoutPages = ViewTreeObserver.OnPreDrawListener {
-            if (rows.width == 0) return@OnPreDrawListener true
-            val height = (scroll.height - rows.top - content.paddingBottom).coerceAtLeast(0)
-            val available = if (rowCount > height / rowStep) (height - dp(ACTION_HEIGHT_DP)).coerceAtLeast(0) else height
-            val count = (available / rowStep).coerceIn(1, rowCount)
-            if (count == rowsPerPage) return@OnPreDrawListener true
-            val index = if (rowsPerPage == 0) appPage else appPage * rowsPerPage / count
-            rowsPerPage = count
-            showPage(index)
-            false
-        }
-        scroll.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
-            override fun onViewAttachedToWindow(view: View) = view.viewTreeObserver.addOnPreDrawListener(layoutPages)
-            override fun onViewDetachedFromWindow(view: View) = view.viewTreeObserver.removeOnPreDrawListener(layoutPages)
-        })
-    }
-
-    private fun paginationRow(index: Int, total: Int, move: (Int) -> Unit) = horizontal().apply {
-        gravity = Gravity.CENTER
-        addView(pageButton("上一页", index > 0) { move(-1) }, LinearLayout.LayoutParams(WRAP_CONTENT, MATCH_PARENT))
-        addView(label("${index + 1}/$total", PAGER_TEXT_SP, tone = SOFT_INK).apply {
-            gravity = Gravity.CENTER
-            minimumWidth = dp(56)
-            setPadding(dp(8), 0, dp(8), 0)
-            maxLines = 1
-            contentDescription = "第 ${index + 1} 页，共 $total 页"
-        }, LinearLayout.LayoutParams(WRAP_CONTENT, MATCH_PARENT))
-        addView(pageButton("下一页", index + 1 < total) { move(1) }, LinearLayout.LayoutParams(WRAP_CONTENT, MATCH_PARENT))
-    }
-
     private fun fillShelf(
         content: LinearLayout, pager: FrameLayout,
         localCovers: MutableList<ShelfCovers.Target>, onlineCovers: MutableList<WeReadCovers.Target>,
         sort: ShelfSort, opened: Map<String, Long>, onlineOpened: Map<String, Long>,
-    ) = with(content) {
+    ) {
         val sources = prefs.shelfSources
         if (sources != renderedShelfSources) {
             shelfPage = 0
@@ -561,17 +490,10 @@ class InkActivity : Activity() {
             shelfPage = 0
         }
         val folder = trail.lastOrNull()
-        val back = when {
-            group != null -> shelfBackButton("返回书架") { navigateWeRead(null) }
-            folder != null -> shelfBackButton(if (trail.size == 1) "返回书架" else "返回上一级") {
-                navigateFolder(trail.dropLast(1))
-            }
+        val backLabel = when {
+            group != null -> "返回书架"
+            folder != null -> if (trail.size == 1) "返回书架" else "返回上一级"
             else -> null
-        }
-        val sorting = sortButton(sort) {
-            prefs.shelfSort = it
-            shelfPage = 0
-            render()
         }
         val local = folderContents.takeIf { sources.local && group == null }
         val entries = buildList {
@@ -581,16 +503,11 @@ class InkActivity : Activity() {
             }
         }.orderedOnShelf(sort, opened, onlineOpened, hidden)
         val hasSource = sources.local || sources.weRead
-        collectionHeader(group?.name ?: folder?.name ?: LauncherPage.SHELF.title,
-            accessory = sorting.takeIf { hasSource }, leading = back)
-        if (local == FolderContents.PermissionRequired) {
-            addView(this@InkActivity.paperButton("允许读取本地图书", primary = false) { requestBooksPermission() },
-                LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
-        }
-        if (entries.isEmpty()) {
+        val message = if (entries.isEmpty()) {
             val loading = local == FolderContents.Loading ||
                 (sources.weRead && folder == null && group == null && weRead.state == WeReadController.State.LOADING)
-            val message = when {
+            if (!loading) shelfPage = 0
+            when {
                 !hasSource -> "未开启书架来源"
                 group != null -> "这个文件夹没有书籍"
                 loading -> "正在读取书架…"
@@ -599,19 +516,34 @@ class InkActivity : Activity() {
                 folder != null -> "这个目录没有书籍"
                 else -> "书架上还没有书籍"
             }
-            message?.let { notice(it) }
-            if (!loading) shelfPage = 0
-            updatePager(pager, 0, 1) {}
-            return@with
-        }
-        val pageSize = SHELF_COLUMNS * 2
-        val total = (entries.size - 1) / pageSize + 1
-        shelfPage = shelfPage.coerceIn(0, total - 1)
-        val start = shelfPage * pageSize
-        tileRows(entries.subList(start, minOf(start + pageSize, entries.size)), SHELF_COLUMNS) {
-            shelfTile(it, localCovers, onlineCovers, sort, onlineOpened, hiddenOnHome = it in hidden)
-        }
-        updatePager(pager, shelfPage, total) { shelfPage += it; render() }
+        } else null
+        val total = (entries.size - 1).coerceAtLeast(0) / SHELF_PAGE_SIZE + 1
+        val index = if (entries.isEmpty()) 0 else shelfPage.coerceIn(0, total - 1).also { shelfPage = it }
+        val start = index * SHELF_PAGE_SIZE
+        val model = ShelfPageModel(
+            title = group?.name ?: folder?.name ?: LauncherPage.SHELF.title,
+            sort = sort.takeIf { hasSource },
+            backLabel = backLabel,
+            permissionRequired = local == FolderContents.PermissionRequired,
+            notice = message,
+            entries = entries.subList(start, minOf(start + SHELF_PAGE_SIZE, entries.size)),
+            index = index,
+            total = total,
+        )
+        content.showShelf(model, pager,
+            goBack = { if (group != null) navigateWeRead(null) else navigateFolder(trail.dropLast(1)) },
+            changeSort = {
+                prefs.shelfSort = it
+                shelfPage = 0
+                render()
+            },
+            requestBooksPermission = ::requestBooksPermission,
+            movePage = {
+                shelfPage += it
+                render()
+            },
+            tile = { shelfTile(it, localCovers, onlineCovers, sort, onlineOpened, hiddenOnHome = it in hidden) },
+        )
     }
 
     private fun navigateWeRead(group: String?) {
@@ -632,11 +564,6 @@ class InkActivity : Activity() {
         }
         weRead.snapshot.account?.let { weReadHistory.record(it, book.id) }
         shelfOrderDirty = prefs.shelfSort == ShelfSort.LAST_OPENED
-    }
-
-    private fun updatePager(pager: FrameLayout, index: Int, total: Int, move: (Int) -> Unit) {
-        pager.removeAllViews()
-        pager.addView(paginationRow(index, total, move), FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
     }
 
     private fun openShelfEntry(entry: ShelfEntry) {
@@ -675,32 +602,6 @@ class InkActivity : Activity() {
                 shelfOrderDirty = prefs.shelfSort == ShelfSort.LAST_OPENED
             }
         }
-    }
-
-    private fun shelfBackButton(description: String, goBack: () -> Unit) = InkGlyph(this, InkGlyph.Kind.LEFT, sizeDp = 20).apply {
-        layoutParams = LinearLayout.LayoutParams(dp(ACTION_HEIGHT_DP), dp(ACTION_HEIGHT_DP))
-        contentDescription = description
-        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
-        buttonRole()
-        action(click = goBack)
-    }
-
-    private fun sortButton(sort: ShelfSort, change: (ShelfSort) -> Unit) = horizontal().apply {
-        val current = sort.label
-        val next = ShelfSort.entries[(sort.ordinal + 1) % ShelfSort.entries.size]
-        gravity = Gravity.END or Gravity.CENTER_VERTICAL
-        minimumHeight = dp(ACTION_HEIGHT_DP)
-        minimumWidth = dp(112)
-        setPaddingRelative(dp(6), 0, dp(4), 0)
-        contentDescription = "排序方式：$current，点按切换为${next.label}"
-        addView(InkGlyph(this@InkActivity, InkGlyph.Kind.SORT, sizeDp = 21), LinearLayout.LayoutParams(dp(24), dp(24)))
-        addView(label(current, LABEL_TEXT_SP).apply {
-            maxLines = 1
-            ellipsize = TextUtils.TruncateAt.END
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(5) })
-        buttonRole()
-        action { change(next) }
     }
 
     private fun shelfTile(
@@ -1180,17 +1081,6 @@ class InkActivity : Activity() {
         homeEditDialog = dialog
         dialog.setOnDismissListener { if (homeEditDialog === dialog) homeEditDialog = null }
     }
-
-    private fun pageButton(text: String, enabled: Boolean, click: () -> Unit) =
-        label(text, PAGER_TEXT_SP, tone = if (enabled) INK else DISABLED_INK).apply {
-            gravity = Gravity.CENTER
-            minimumWidth = dp(80)
-            setPadding(dp(10), 0, dp(10), 0)
-            maxLines = 1
-            isEnabled = enabled
-            if (enabled) action(click = click)
-            buttonRole()
-        }
 
     private fun footer(pages: List<LauncherPage>) = column().apply {
         setPadding(dp(PAGE_INSET_DP), 0, dp(PAGE_INSET_DP), dp(4))
