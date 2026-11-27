@@ -47,5 +47,16 @@ jobs:
         run: |
           export JAVA_HOME="${JAVA_HOME_17_X64:?JDK 17 is required}"
           export PATH="$JAVA_HOME/bin:$PATH"
-          sdkmanager --install "platforms;$SDK_PLATFORM" "build-tools;$BUILD_TOOLS"
+          if [[ ! -f "$ANDROID_HOME/platforms/$SDK_PLATFORM/android.jar" ||
+                ! -x "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" ]]; then
+            sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+            if [[ ! -x "$sdkmanager" ]]; then
+              sdkmanager=$(find "$ANDROID_HOME/cmdline-tools" -path '*/bin/sdkmanager' -type f | sort -V | tail -n 1)
+            fi
+            if [[ ! -x "$sdkmanager" ]]; then
+              echo 'Android SDK command-line tools were not found on the runner.' >&2
+              exit 1
+            fi
+            "$sdkmanager" --sdk_root="$ANDROID_HOME" --install "platforms;$SDK_PLATFORM" "build-tools;$BUILD_TOOLS"
+          fi
           ./gradlew --no-daemon :app:assembleRelease :app:lintRelease
