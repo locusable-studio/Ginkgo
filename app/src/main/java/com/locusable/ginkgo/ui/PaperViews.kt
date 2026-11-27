@@ -36,6 +36,13 @@ internal fun Context.label(value: String, size: Float, face: Typeface = Typeface
     gravity = Gravity.CENTER_VERTICAL or Gravity.START
 }
 
+internal fun Context.bookAuthorLabel() = label("未知", CAPTION_TEXT_SP, tone = SOFT_INK).apply {
+    setSingleLine(true)
+    ellipsize = TextUtils.TruncateAt.END
+    includeFontPadding = false
+    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+}
+
 private fun Context.caption(value: String) = label(value, CAPTION_TEXT_SP, face = Typeface.MONOSPACE, tone = SOFT_INK).apply {
     letterSpacing = 0.045f
     maxLines = 1
@@ -52,10 +59,10 @@ internal fun View.action(stroke: Int = Color.TRANSPARENT, click: () -> Unit) {
     setOnClickListener { click() }
 }
 
-internal fun LinearLayout.title(text: String, accessory: View? = null, leading: View? = null) {
+internal fun LinearLayout.title(text: String, accessory: View? = null, leading: View? = null, singleLine: Boolean = false) {
     val heading = context.label(text, PAGE_TITLE_SP, face = Typeface.DEFAULT_BOLD).apply {
         minimumHeight = context.dp(ACTION_HEIGHT_DP)
-        maxLines = 2
+        if (singleLine) setSingleLine(true) else maxLines = 2
         ellipsize = TextUtils.TruncateAt.END
     }
     if (accessory == null && leading == null) {
@@ -121,7 +128,7 @@ internal fun <T : Any> ListView.showTileRows(
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
             val row = convertView as? TileListRow ?: TileListRow(context).apply {
                 layoutParams = AbsListView.LayoutParams(MATCH_PARENT, height)
-                setPadding(0, rowGap, 0, 0)
+                setPadding(0, 0, 0, rowGap)
             }
             if (row.position != position) {
                 row.reset()
@@ -148,11 +155,13 @@ private class TileListRow(context: Context) : LinearLayout(context) {
 internal data class TileScroll(val row: Int = 0, val offset: Int = 0)
 
 internal fun ListView.tileScroll(): TileScroll? = getChildAt(0)?.let {
-    TileScroll(firstVisiblePosition, it.top - paddingTop)
+    TileScroll(firstVisiblePosition, it.top - listPaddingTop)
 }
 
 internal fun ListView.restoreTileScroll(position: TileScroll) {
-    if (count > 0) setSelectionFromTop(position.row.coerceIn(0, count - 1), position.offset)
+    if (count > 0 && (position.row != 0 || position.offset != 0)) {
+        setSelectionFromTop(position.row.coerceIn(0, count - 1), position.offset)
+    }
 }
 
 internal fun LinearLayout.notice(message: String) {

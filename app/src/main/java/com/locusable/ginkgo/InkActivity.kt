@@ -25,6 +25,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.view.ViewTreeObserver
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
 import android.widget.AbsListView
@@ -75,6 +76,7 @@ import com.locusable.ginkgo.ui.SECTION_GAP_DP
 import com.locusable.ginkgo.ui.SOFT_INK
 import com.locusable.ginkgo.ui.TileScroll
 import com.locusable.ginkgo.ui.action
+import com.locusable.ginkgo.ui.bookAuthorLabel
 import com.locusable.ginkgo.ui.bookTitlePreview
 import com.locusable.ginkgo.ui.buttonRole
 import com.locusable.ginkgo.ui.column
@@ -200,8 +202,15 @@ class InkActivity : Activity() {
             } else if (previous?.session?.cookies != current.session?.cookies) {
                 bindOnlineCovers()
             }
-        } else if ((page != LauncherPage.SHELF || prefs.shelfSources.weRead) &&
-            (previous?.shelf != current.shelf || previous?.session != current.session || (loaded && page == LauncherPage.SHELF))) {
+        } else if (page == LauncherPage.SHELF) {
+            if (prefs.shelfSources.weRead) {
+                if (previous?.account != current.account || previous?.shelf != current.shelf) {
+                    render()
+                } else if (previous?.session?.cookies != current.session?.cookies) {
+                    bindOnlineCovers()
+                }
+            }
+        } else if (previous?.shelf != current.shelf || previous?.session != current.session) {
             render(scrollY = body?.scrollY ?: 0)
         }
         if (page == LauncherPage.SETTINGS) {
@@ -386,13 +395,15 @@ class InkActivity : Activity() {
             return
         }
         val root = column().apply { setBackgroundColor(Color.WHITE) }
-        val panel = column().apply { setPadding(dp(PAGE_INSET_DP), 0, dp(PAGE_INSET_DP), 0) }
+        val panel = column().apply {
+            setPadding(dp(PAGE_INSET_DP), dp(PAGE_TOP_DP), dp(PAGE_INSET_DP), 0)
+        }
         root.addView(panel, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
         val withBooks = page == LauncherPage.SHELF || page == LauncherPage.HOME
         val sort = if (page == LauncherPage.SHELF) ShelfSort.LAST_OPENED else ShelfSort.NAME
         val opened = if (withBooks) prefs.folderOpenTimes() else emptyMap()
         val onlineOpened = if (withBooks) weReadHistory.times(weRead.snapshot.account) else emptyMap()
-        val content = column().apply { setPadding(0, dp(PAGE_TOP_DP), 0, dp(PAGE_BOTTOM_DP)) }
+        val content = column().apply { setPadding(0, 0, 0, dp(PAGE_BOTTOM_DP)) }
         val coverTargets = mutableListOf<ShelfCovers.Target>()
         val onlineCoverTargets = mutableListOf<WeReadCovers.Target>()
         var grid: ListView? = null
@@ -421,7 +432,7 @@ class InkActivity : Activity() {
             clipToPadding = false
             addView(content, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         } else grid.apply {
-            setPadding(0, dp(PAGE_TOP_DP), 0, dp(PAGE_BOTTOM_DP))
+            setPadding(0, 0, 0, dp(PAGE_BOTTOM_DP))
             restoreTileScroll(if (page == LauncherPage.APPS) appsScroll else shelfScroll)
         }
         body = view
@@ -438,7 +449,15 @@ class InkActivity : Activity() {
             renderedOnlineCovers = onlineCoverTargets
             bindOnlineCovers()
         }
-        if (grid == null && scrollY > 0) view.post { view.scrollTo(0, scrollY) }
+        if (grid == null && scrollY > 0) {
+            view.viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
+                override fun onPreDraw(): Boolean {
+                    view.viewTreeObserver.removeOnPreDrawListener(this)
+                    view.scrollTo(0, scrollY)
+                    return true
+                }
+            })
+        }
     }
 
     private fun watchShelfRows(list: ListView, opened: Map<String, Long>): ShelfViewport {
@@ -492,6 +511,7 @@ class InkActivity : Activity() {
             books,
             booksReady = recentLocalBooks != null && weRead.state != WeReadController.State.LOADING,
             featuredCover = { book -> resumeCover(book, localCovers, onlineCovers) },
+            bindAuthor = { book, display -> bindBookAuthor(book, localCovers, display) },
             recentBookTile = { book -> shelfTile(book, localCovers, onlineCovers, ShelfSort.NAME, onlineOpened) },
             openBook = ::openShelfEntry,
         )
@@ -670,7 +690,27 @@ class InkActivity : Activity() {
                 }
             }
         }
-    }) { openShelfEntry(entry) }.apply { bookVisibilityAction(entry, hiddenOnHome) }
+    }) { openShelfEntry(entry) }.apply {
+        if (!entry.directory) {
+            val author = context.bookAuthorLabel()
+            val description = contentDescription
+            fun showAuthor(name: String) {
+                author.text = name
+                contentDescription = "$description，作者：$name"
+            }
+            showAuthor(author.text.toString())
+            addView(author, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(2) })
+            bindBookAuthor(entry, localCovers, ::showAuthor)
+        }
+        bookVisibilityAction(entry, hiddenOnHome)
+    }
+
+    private fun bindBookAuthor(book: ShelfEntry, localCovers: MutableList<ShelfCovers.Target>, display: (String) -> Unit) {
+        when (book) {
+            is ShelfEntry.Local -> if (book.item.coverFormat != null) localCovers.add(ShelfCovers.Target.Author(book.item, display))
+            is ShelfEntry.Online -> (book.entry as? WeReadEntry.Book)?.author?.let(display)
+        }
+    }
 
     private fun resumeCover(
         book: ShelfEntry, localCovers: MutableList<ShelfCovers.Target>, onlineCovers: MutableList<WeReadCovers.Target>,
@@ -844,7 +884,7 @@ class InkActivity : Activity() {
             else -> if (group != null) "这个文件夹没有书籍" else "这个目录没有书籍"
         } else null
         val label = if (folderTrail.size > 1) "返回上一级" else "返回书架"
-        val panel = paperDialogPanel(maxHeight = dp(resources.configuration.screenHeightDp * 3 / 5))
+        val panel = paperDialogPanel(maxHeight = dp(resources.configuration.screenHeightDp * 3 / 4))
         val list = panel.showShelfGrid(ShelfPageModel(name, label, local == FolderContents.PermissionRequired, message, entries),
             sort, onlineOpened, hidden)
         folderViewport = list?.let {

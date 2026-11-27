@@ -14,7 +14,7 @@ internal sealed interface WeReadEntry {
 
     data class Book(
         override val id: String, override val name: String, val readAt: Long,
-        val cover: String?, val readerLink: String?,
+        val cover: String?, val readerLink: String?, val author: String? = null,
     ) : WeReadEntry {
         val isUploaded get() = id.isWeReadUploadId()
     }
@@ -40,6 +40,7 @@ internal data class WeReadShelf(
         put("books", JSONArray().apply {
             books.forEach { b -> put(JSONObject().put("bookId", b.id).put("title", b.name)
                 .put("readUpdateTime", b.readAt).put("readerLink", b.readerLink).apply {
+                    b.author?.let { put("author", it) }
                     if (!b.isUploaded) put("cover", b.cover)
                 }) }
         })
@@ -54,12 +55,14 @@ internal data class WeReadShelf(
     companion object {
         fun parse(json: JSONObject, cached: WeReadShelf? = null): WeReadShelf {
             val rows = json.optJSONArray("books") ?: throw JSONException("Missing shelf books")
+            val cachedAuthors = cached?.books.orEmpty().mapNotNull { book -> book.author?.let { book.id to it } }.toMap()
             val books = (0 until rows.length()).mapNotNull { i ->
                 val item = rows.getJSONObject(i)
                 val id = item.value("bookId", 128) ?: return@mapNotNull null // Non-book entrance.
                 val name = item.value("title", 512) ?: throw JSONException("Missing book title")
+                val author = (item.opt("author") as? String)?.trim()?.takeIf { it.length in 1..256 } ?: cachedAuthors[id]
                 WeReadEntry.Book(id, name, item.optLong("readUpdateTime", 0).coerceAtLeast(0),
-                    item.value("cover", WEREAD_COVER_URL_LIMIT), item.value("readerLink", 2048))
+                    item.value("cover", WEREAD_COVER_URL_LIMIT), item.value("readerLink", 2048), author)
             }.distinctBy { it.id }
             // Omission differs from a confirmed empty archive. A partial response cannot erase local groups.
             val archives = if (json.isNull("archive")) cached?.archives else parseArchives(json.getJSONArray("archive"))

@@ -18,6 +18,7 @@ import com.locusable.ginkgo.ui.LABEL_TEXT_SP
 import com.locusable.ginkgo.ui.LINE
 import com.locusable.ginkgo.ui.SOFT_INK
 import com.locusable.ginkgo.ui.TILE_COLUMN_GAP_DP
+import com.locusable.ginkgo.ui.TILE_ROW_GAP
 import com.locusable.ginkgo.ui.action
 import com.locusable.ginkgo.ui.addTileCells
 import com.locusable.ginkgo.ui.buttonRole
@@ -61,7 +62,7 @@ internal fun LinearLayout.showShelf(
     tile: (ShelfEntry, ShelfRowCovers) -> View,
 ): ListView? {
     model.folderName?.let { name ->
-        title(name, leading = model.backLabel?.let { context.shelfBackButton(it, goBack) })
+        title(name, leading = model.backLabel?.let { context.shelfBackButton(it, goBack) }, singleLine = true)
     }
     if (model.entries.isEmpty()) {
         if (model.permissionRequired) showPermissionEmpty(requestBooksPermission)
@@ -71,7 +72,10 @@ internal fun LinearLayout.showShelf(
     val columns = if (model.folderName == null) SHELF_COLUMNS else FOLDER_COLUMNS
     return context.paperTileList().apply {
         if (model.permissionRequired) {
-            addHeaderView(context.column().apply { showPermissionHint(requestBooksPermission) }, null, true)
+            addHeaderView(context.column().apply {
+                showPermissionHint(requestBooksPermission)
+                gap(TILE_ROW_GAP)
+            }, null, true)
         }
         showTileRows(model.entries, columns) { row, entries ->
             val covers = ShelfRowCovers()
