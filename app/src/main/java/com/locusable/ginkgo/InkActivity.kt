@@ -99,7 +99,6 @@ import com.locusable.ginkgo.ui.page.showHome
 import com.locusable.ginkgo.ui.page.showShelf
 import com.locusable.ginkgo.ui.paperButton
 import com.locusable.ginkgo.ui.paperDialog
-import com.locusable.ginkgo.ui.paperDialogContent
 import com.locusable.ginkgo.ui.paperDialogPanel
 import com.locusable.ginkgo.ui.paperRule
 import com.locusable.ginkgo.ui.paperShape
@@ -180,7 +179,7 @@ class InkActivity : Activity() {
     private var weReadGroup: String? = null
     private var observedSnapshot: WeReadSnapshot? = null
     private var observedWeReadLoading = true
-    private var loginDialog: Dialog? = null
+    private var loginDialog: WeReadLoginWindow? = null
     private var wallpaperDialog: Dialog? = null
     private var wallpaperJob: Future<*>? = null
     private var wallpaperSaving = false
@@ -224,7 +223,7 @@ class InkActivity : Activity() {
             body?.let { settingsPage.updateWeReadProfile(it, weRead.profile) }
             if (current.session != null && previous?.session?.account != current.session.account) weRead.loadProfile()
         }
-        loginDialog?.let(::updateWeReadLoginDialog)
+        loginDialog?.render()
     }
     private var pendingBook: FolderItem? = null
     private var shelfOrderDirty = false
@@ -257,8 +256,7 @@ class InkActivity : Activity() {
         // onPause cancels outstanding loads; resume them even if refresh kept the same views.
         if (page == LauncherPage.SHELF) refreshVisibleShelfCovers()
         else if (body === previousBody) bindOnlineCovers()
-        if (page == LauncherPage.HOME) loadRecentLocalBooks()
-        refreshShelf()
+        refreshReadingData()
         if (resumeWallpaperExport) {
             resumeWallpaperExport = false
             requestWallpaperExport()
@@ -359,9 +357,8 @@ class InkActivity : Activity() {
         if (next != LauncherPage.SHELF) dismissShelfFolder(refreshRoot = false)
         page = next
         render()
-        if (next == LauncherPage.HOME) loadRecentLocalBooks()
         observeWeRead()
-        refreshShelf()
+        refreshReadingData()
     }
 
     private fun observeWeRead() {
@@ -372,12 +369,19 @@ class InkActivity : Activity() {
         if (observe) weRead.observe(weReadChanged) else weRead.unobserve(weReadChanged)
     }
 
-    private fun refreshShelf() {
-        if (page != LauncherPage.SHELF || !resumed || isDestroyed) return
-        reloadFolder()
-        if (folderDialog != null) reloadOpenFolder()
+    private fun refreshReadingData() {
+        if (!resumed || isDestroyed) return
+        when (page) {
+            LauncherPage.HOME -> loadRecentLocalBooks()
+            LauncherPage.SHELF -> {
+                reloadFolder()
+                if (folderDialog != null) reloadOpenFolder()
+            }
+            else -> return
+        }
         if (prefs.shelfSources.weRead) weRead.whenLoaded {
-            if (page == LauncherPage.SHELF && resumed && !isDestroyed && prefs.shelfSources.weRead) weRead.sync()
+            if (resumed && !isDestroyed && (page == LauncherPage.HOME || page == LauncherPage.SHELF) &&
+                prefs.shelfSources.weRead) weRead.sync()
         }
     }
 
@@ -1153,59 +1157,89 @@ class InkActivity : Activity() {
             if (signedIn) "退出登录" else "清除缓存") { weRead.forget() }
     }
 
-    @Suppress("DEPRECATION") // Resize for OTP input on the target Android 8.1 reader.
     private fun showWeReadLoginDialog() {
-        val dialog = paperDialog(secure = true)
-        loginDialog = dialog
-        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
-            WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
-        dialog.setContentView(paperDialogContent(column()).apply { id = android.R.id.custom })
-        dialog.setOnDismissListener {
-            if (loginDialog === dialog) {
-                loginDialog = null
-                weRead.stopLogin()
-            }
-        }
+        val login = WeReadLoginWindow()
+        loginDialog = login
         weRead.beginLogin()
-        presentPaperDialog(dialog)
+        presentPaperDialog(login.dialog)
     }
 
-    private fun updateWeReadLoginDialog(dialog: Dialog) {
-        if (weRead.snapshot.session != null) {
+    @Suppress("DEPRECATION") // Keep the footer reachable when the reader's OTP keyboard opens.
+    private inner class WeReadLoginWindow {
+        val dialog = paperDialog(secure = true)
+        private val content = column().apply { gravity = Gravity.CENTER }
+        private val scroll = ScrollView(this@InkActivity).apply {
+            isFillViewport = true
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            addView(content)
+        }
+        private var previous: Pair<WeReadController.State, WeReadController.Notice?>? = null
+        private var submit: (() -> Unit)? = null
+        private val confirm = paperButton("确认", primary = true) { submit?.invoke() }
+        private val clear = if (weRead.snapshot.account == null) null else paperButton("清除本机缓存", primary = false) {
+            dismiss()
+            confirmWeReadForget(signedIn = false)
+        }
+
+        init {
+            dialog.setOnDismissListener { stopLogin() }
+            dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
+            dialog.setContentView(paperDialogPanel().apply {
+                addView(label("微信读书登录", DIALOG_TITLE_SP, face = Typeface.DEFAULT_BOLD).apply {
+                    gravity = Gravity.CENTER
+                }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+                gap(12)
+                addView(scroll, LinearLayout.LayoutParams(MATCH_PARENT, dp(264), 1f))
+                gap(12)
+                addView(horizontal().apply {
+                    gravity = Gravity.CENTER
+                    addView(paperButton("取消", primary = false) { dismiss() },
+                        LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+                    addView(confirm, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(10) })
+                }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+                clear?.let {
+                    gap(6)
+                    addView(it, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply {
+                        gravity = Gravity.CENTER_HORIZONTAL
+                    })
+                }
+            })
+        }
+
+        fun dismiss() {
+            stopLogin()
             dialog.dismiss()
-            return
         }
-        val content = dialog.findViewById<ScrollView>(android.R.id.custom)
-        val state = weRead.state
-        val next = state to weRead.notice
-        val previous = content.tag as? Pair<*, *>
-        if (next == previous) return
-        content.tag = next
-        if (previous?.first == WeReadController.State.VERIFY && state != WeReadController.State.VERIFY) {
-            dialog.currentFocus?.let { focused ->
-                getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(focused.windowToken, 0)
-                focused.clearFocus()
-            }
+
+        private fun stopLogin() {
+            if (loginDialog !== this) return
+            loginDialog = null
+            weRead.stopLogin()
         }
-        val panel = paperDialogPanel().apply {
-            gravity = Gravity.CENTER_HORIZONTAL
-            addView(label(if (state == WeReadController.State.VERIFY) "验证微信读书登录" else "微信读书扫码登录",
-                DIALOG_TITLE_SP, face = Typeface.DEFAULT_BOLD).apply { gravity = Gravity.CENTER },
-                LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-            gap(12)
-            fun message(text: String) {
-                addView(label(text, ACTION_TEXT_SP, tone = SOFT_INK).apply { gravity = Gravity.CENTER },
-                    LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+
+        fun render() {
+            if (weRead.snapshot.session != null) {
+                dismiss()
+                return
             }
-            var submit: (() -> Unit)? = null
-            var button = "确认"
+            val state = weRead.state
+            val next = state to weRead.notice
+            if (next == previous) return
+            if (previous?.first == WeReadController.State.VERIFY && state != WeReadController.State.VERIFY) {
+                dialog.currentFocus?.let { focused ->
+                    getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(focused.windowToken, 0)
+                    focused.clearFocus()
+                }
+            }
+            previous = next
+            submit = null
+            content.removeAllViews()
             when (state) {
-                WeReadController.State.STARTING_LOGIN, WeReadController.State.SCAN -> {
+                WeReadController.State.SCAN -> {
                     message("使用手机微信扫一扫，并确认登录")
-                    val qr = weRead.qr?.let(::wechatQr) ?: label("正在获取二维码…", ACTION_TEXT_SP, tone = SOFT_INK).apply {
-                        gravity = Gravity.CENTER
-                    }
-                    addView(qr, LinearLayout.LayoutParams(MATCH_PARENT, dp(222)))
+                    content.addView(wechatQr(checkNotNull(weRead.qr)), LinearLayout.LayoutParams(MATCH_PARENT, dp(222)))
                 }
                 WeReadController.State.VERIFY -> {
                     message(when (weRead.notice) {
@@ -1213,7 +1247,7 @@ class InkActivity : Activity() {
                         WeReadController.Notice.LOGIN_FAILED -> "暂时无法验证，请重试。"
                         else -> "输入微信读书登录页面显示的 4 位验证码。"
                     })
-                    gap(12)
+                    content.gap(12)
                     val code = EditText(this@InkActivity).apply {
                         inputType = InputType.TYPE_CLASS_NUMBER
                         filters = arrayOf(InputFilter.LengthFilter(4))
@@ -1222,49 +1256,37 @@ class InkActivity : Activity() {
                         hint = "4 位验证码"
                         setSingleLine()
                     }
-                    addView(code, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+                    content.addView(code, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+                    confirm.text = "确认"
                     submit = {
                         val value = code.text.toString()
                         if (value.length == 4) weRead.submitCode(value) else toast("请输入 4 位验证码")
                     }
                 }
                 WeReadController.State.IDLE -> {
-                    message(if (weRead.notice == WeReadController.Notice.LOGIN_TIMEOUT) "二维码已过期。"
-                        else "未能获取登录二维码，请重试。")
-                    button = "重新扫码"
-                    submit = { weRead.beginLogin() }
+                    message(when (weRead.notice) {
+                        WeReadController.Notice.LOGIN_TIMEOUT -> "二维码已过期。"
+                        WeReadController.Notice.CODE_EXPIRED -> "验证码已过期，请重新扫码。"
+                        WeReadController.Notice.LOGIN_STATUS_FAILED -> "暂时无法确认登录结果，请重新扫码。"
+                        else -> "未能获取登录二维码，请重试。"
+                    })
+                    confirm.text = "重新扫码"
+                    submit = weRead::beginLogin
                 }
+                WeReadController.State.VERIFYING -> message("正在验证登录…")
                 WeReadController.State.SAVING -> message("正在完成登录…")
                 else -> message("正在获取二维码…")
             }
-            gap(12)
-            addView(horizontal().apply {
-                gravity = Gravity.CENTER
-                val confirm = submit
-                addView(this@InkActivity.paperButton("取消", primary = false) { dialog.dismiss() },
-                    LinearLayout.LayoutParams(if (confirm == null) WRAP_CONTENT else 0, WRAP_CONTENT,
-                        if (confirm == null) 0f else 1f))
-                if (confirm != null) {
-                    addView(this@InkActivity.paperButton(button, primary = true, click = confirm),
-                        LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(10) })
-                }
-            }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-            // An expired session can be renewed by scanning or cleared explicitly without adding a settings row.
-            if (weRead.snapshot.account != null && state != WeReadController.State.SAVING) {
-                gap(6)
-                addView(this@InkActivity.paperButton("清除本机缓存", primary = false) {
-                    if (loginDialog === dialog) {
-                        loginDialog = null
-                        dialog.dismiss()
-                        weRead.stopLogin()
-                        confirmWeReadForget(signedIn = false)
-                    }
-                })
-            }
+            confirm.visibility = if (submit != null) View.VISIBLE else View.INVISIBLE
+            clear?.visibility = if (state == WeReadController.State.SAVING) View.INVISIBLE else View.VISIBLE
+            scroll.scrollTo(0, 0)
         }
-        content.removeAllViews()
-        content.addView(panel)
-        content.scrollTo(0, 0)
+
+        private fun message(text: String) {
+            content.addView(label(text, ACTION_TEXT_SP, tone = SOFT_INK).apply {
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        }
     }
 
     private fun wechatQr(modules: Array<BooleanArray>): View = object : View(this) {

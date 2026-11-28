@@ -27,7 +27,8 @@ internal object WeReadWeb {
 
     sealed interface Poll {
         data object Waiting : Poll
-        data object TimedOut : Poll
+        data object RequestRejected : Poll
+        data object VerificationExpired : Poll
         data class Verification(val invalid: Boolean) : Poll
         class Confirmed(val session: Session) : Poll
     }
@@ -45,9 +46,17 @@ internal object WeReadWeb {
         val json = try {
             jsonRequest(path, login.cookies, timeout = 8_000)
         } catch (_: Expired) {
-            return Poll.TimedOut
+            return Poll.RequestRejected
         }
-        if (json.errorCode() == -2012) return Poll.TimedOut
+        val logic = json.optString("logicCode")
+        when (logic) {
+            "NEED_OTP" -> return Poll.Verification(false)
+            "OTP_NOT_MATCH" -> return Poll.Verification(true)
+            "OTP_EXPIRED" -> return Poll.VerificationExpired
+        }
+        val error = json.errorCode()
+        if (error == -2012) return Poll.RequestRejected
+        if (error != 0) throw Rejected()
         if (json.optBoolean("succeed")) {
             val account = json.value("webLoginVid", 64) ?: login.cookies["wr_vid"] ?: throw Rejected()
             val access = json.value("accessToken", 4096) ?: login.cookies["wr_skey"] ?: throw Rejected()
@@ -57,14 +66,9 @@ internal object WeReadWeb {
             login.cookies.putIfAbsent("wr_ql", "0")
             return Poll.Confirmed(session(account, login.cookies) ?: throw Rejected())
         }
-        return when (json.optString("logicCode")) {
-            "NEED_OTP" -> Poll.Verification(false)
-            "OTP_NOT_MATCH" -> Poll.Verification(true)
-            "OTP_EXPIRED" -> Poll.TimedOut
-            // The web status call can time out while the user is still scanning.
-            "", "LOGIN_TIMEOUT" -> if (json.errorCode() == 0) Poll.Waiting else throw Rejected()
-            else -> throw Rejected()
-        }
+        // A long-poll timeout is also returned while the phone is still waiting for confirmation.
+        if (logic.isEmpty() || logic == "LOGIN_TIMEOUT") return Poll.Waiting
+        throw Rejected()
     }
 
     fun shelf(session: Session, cached: WeReadShelf?): Pair<WeReadShelf, Session> {
