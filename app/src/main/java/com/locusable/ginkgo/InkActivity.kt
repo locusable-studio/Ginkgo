@@ -168,6 +168,7 @@ class InkActivity : Activity() {
     private var folderRequest = 0
     private var openFolderContents: FolderContents = FolderContents.Loading
     private var openFolderRequest = 0
+    private var selectingFolder = false
     private var folderDialog: ShelfFolderWindow? = null
     private var folderViewport: ShelfViewport? = null
     private var renderedFolderId: String? = null
@@ -286,6 +287,7 @@ class InkActivity : Activity() {
     override fun onPause() {
         if (updateFlow.isInitialized()) updateFlow.value.pause()
         pendingBook = null
+        cancelFolderRead()
         resumed = false
         if (page == LauncherPage.SHELF) refreshVisibleShelfCovers()
         loginDialog?.dismiss()
@@ -325,7 +327,7 @@ class InkActivity : Activity() {
     @Deprecated("Android 8.1 uses key-based navigation")
     override fun onBackPressed() {
         when {
-            page == LauncherPage.SHELF && folderDialog != null -> backFromShelfFolder()
+            page == LauncherPage.SHELF && (folderDialog != null || selectingFolder) -> backFromShelfFolder()
             page != LauncherPage.HOME -> show(LauncherPage.HOME)
             !isDefaultHome() -> super.onBackPressed()
         }
@@ -630,6 +632,8 @@ class InkActivity : Activity() {
 
     private fun openShelfGroup(group: String) {
         pendingBook = null
+        cancelFolderRead()
+        folderTrail = emptyList()
         weReadGroup = group
         renderShelfFolder()
     }
@@ -647,6 +651,7 @@ class InkActivity : Activity() {
     }
 
     private fun openShelfEntry(entry: ShelfEntry) {
+        if (!entry.directory) cancelFolderRead()
         when (entry) {
             is ShelfEntry.Local -> openFolderItem(entry.item)
             is ShelfEntry.Online -> when (val item = entry.entry) {
@@ -691,7 +696,7 @@ class InkActivity : Activity() {
         when {
             !entry.directory -> bindBookCover(entry, cover, localCovers, onlineCovers)
             entry is ShelfEntry.Local -> localCovers.add(ShelfCovers.Target.Directory(entry.item.location) { faces ->
-                if (faces.isNotEmpty() || rootShelf) cover.showCoverMosaic(faces, markFolder = rootShelf)
+                if (faces.isNotEmpty() || rootShelf) cover.showFolderPreview(faces, rootShelf = rootShelf)
                 else cover.showCoverTitle(entry.displayTitle)
             })
             entry is ShelfEntry.Online -> {
@@ -699,11 +704,11 @@ class InkActivity : Activity() {
                 val books = group.books.map(ShelfEntry::Online).orderedOnShelf(sort, emptyMap(), onlineOpened).take(4)
                     .map { it.entry as WeReadEntry.Book }
                 val faces = books.map { ShelfCovers.Face(it.name, null) }.toMutableList()
-                if (faces.isNotEmpty()) cover.showCoverMosaic(faces, fileNames = false, markFolder = rootShelf)
+                if (faces.isNotEmpty()) cover.showFolderPreview(faces, fileNames = false, rootShelf = rootShelf)
                 for ((index, book) in books.withIndex()) {
                     onlineCovers.add(WeReadCovers.Target(book) { bitmap ->
                         faces[index] = ShelfCovers.Face(book.name, bitmap)
-                        cover.showCoverMosaic(faces, fileNames = false, markFolder = rootShelf)
+                        cover.showFolderPreview(faces, fileNames = false, rootShelf = rootShelf)
                     })
                 }
             }
@@ -766,7 +771,7 @@ class InkActivity : Activity() {
             if (hiddenOnHome) append("，已在首页隐藏")
         }
         val artwork = FrameLayout(this@InkActivity).apply {
-            if (rootShelf && directory) showCoverMosaic(emptyList(), markFolder = true)
+            if (rootShelf && directory) showFolderPreview(emptyList(), rootShelf = true)
             else showCoverTitle(name, rootShelf = rootShelf)
         }
         val cover = CoverFrame(outlined = !rootShelf || !directory).apply {
@@ -839,57 +844,46 @@ class InkActivity : Activity() {
         }, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
     }
 
-    private fun FrameLayout.showCoverMosaic(faces: List<ShelfCovers.Face>, fileNames: Boolean = true, markFolder: Boolean = false) {
+    private fun FrameLayout.showFolderPreview(faces: List<ShelfCovers.Face>, fileNames: Boolean = true, rootShelf: Boolean = false) {
         removeAllViews()
-        setBackgroundColor(if (markFolder) Color.TRANSPARENT else 0xFFE6E6E6.toInt())
-        if (markFolder) {
-            addView(View(context).apply { background = paperShape(LINE, PRESS_FILL) },
-                FrameLayout.LayoutParams(dp(26), dp(8), Gravity.TOP or Gravity.START).apply {
-                    topMargin = dp(8)
-                    marginStart = dp(12)
-                })
-        }
+        setBackgroundColor(if (rootShelf) Color.TRANSPARENT else 0xFFE6E6E6.toInt())
+        val gutter = if (rootShelf) dp(4) else 0
         addView(column().apply {
-            if (markFolder) {
-                background = paperShape(LINE, PRESS_FILL)
-                val inset = dp(4)
-                setPadding(inset, inset, inset, inset)
-            }
-            if (faces.isNotEmpty()) repeat(2) { line ->
+            repeat(2) { line ->
                 addView(horizontal().apply {
                     repeat(2) { column ->
                         val panel = FrameLayout(this@InkActivity)
-                        faces.getOrNull(line * 2 + column)?.let { face ->
+                        val face = faces.getOrNull(line * 2 + column)
+                        if (face != null) {
                             if (face.bitmap != null) panel.showCoverBitmap(face.bitmap)
                             else panel.showCoverTitle(if (fileNames) face.name.substringBeforeLast('.') else face.name, compact = true)
+                        } else if (rootShelf) {
+                            panel.setBackgroundColor(PRESS_FILL)
                         }
+                        if (rootShelf) panel.foreground = paperShape(COVER_OUTLINE, Color.TRANSPARENT)
                         addView(panel, LinearLayout.LayoutParams(0, MATCH_PARENT, 1f).apply {
-                            if (markFolder && column > 0) marginStart = dp(3)
+                            if (column > 0) marginStart = gutter
                         })
                     }
                 }, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f).apply {
-                    if (markFolder && line > 0) topMargin = dp(3)
+                    if (line > 0) topMargin = gutter
                 })
             }
         }, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT).apply {
-            if (markFolder) setMargins(dp(7), dp(15), dp(7), dp(8))
+            if (rootShelf) setMargins(dp(7), dp(11), dp(7), dp(11))
         })
     }
 
     private fun navigateFolder(trail: List<FolderLocation>) {
         pendingBook = null
-        weReadGroup = null
-        folderTrail = trail
-        openFolderContents = FolderContents.Loading
-        renderShelfFolder()
-        reloadOpenFolder()
+        loadOpenFolder(trail, selecting = true)
     }
 
     private fun backFromShelfFolder() {
         if (folderTrail.size > 1) navigateFolder(folderTrail.dropLast(1)) else dismissShelfFolder()
     }
 
-    private fun renderShelfFolder() {
+    private fun renderShelfFolder(shelfWidth: Int? = null) {
         val sources = prefs.shelfSources
         val snapshot = weRead.snapshot
         val folder = folderTrail.lastOrNull()?.takeIf { sources.local }
@@ -911,13 +905,12 @@ class InkActivity : Activity() {
             group?.books.orEmpty().forEach { add(ShelfEntry.Online(it)) }
         }.orderedOnShelf(sort, opened, onlineOpened, hidden, directories = directoryOpenTimes)
         val message = if (entries.isEmpty()) when (local) {
-            FolderContents.Loading -> "正在读取书架…"
             FolderContents.PermissionRequired -> null
-            FolderContents.Unavailable -> "无法读取此目录"
-            else -> if (group != null) "这个文件夹没有书籍" else "这个目录没有书籍"
+            FolderContents.Unavailable -> "无法读取此文件夹"
+            else -> "这个文件夹没有书籍"
         } else null
         val parentPath = if (folderTrail.size > 1) folderTrail.dropLast(1).joinToString(" / ") { it.name } else null
-        val window = folderDialog ?: ShelfFolderWindow(this, checkNotNull(body).width, ::backFromShelfFolder).also { created ->
+        val window = folderDialog ?: ShelfFolderWindow(this, shelfWidth ?: checkNotNull(body).width, ::backFromShelfFolder).also { created ->
             folderDialog = created
             created.dialog.setOnDismissListener { if (folderDialog === created) dismissShelfFolder() }
             created.dialog.setOnKeyListener { _, key, event ->
@@ -927,7 +920,7 @@ class InkActivity : Activity() {
                 }
             }
         }
-        window.prepare(name, parentPath, loading = local == FolderContents.Loading)
+        window.prepare(name, parentPath)
         val list = window.content.showShelfGrid(
             ShelfPageModel(local == FolderContents.PermissionRequired, message, entries, inFolder = true),
             sort, onlineOpened, hidden)
@@ -950,7 +943,7 @@ class InkActivity : Activity() {
         renderedFolderId = null
         folderScroll.clear()
         openFolderContents = FolderContents.Loading
-        openFolderRequest++
+        cancelFolderRead()
         if (dialog == null) return
         pendingBook = null
         if (dialog.isShowing) dialog.dismiss()
@@ -978,15 +971,30 @@ class InkActivity : Activity() {
         }
     }
 
-    private fun reloadOpenFolder() {
-        val location = folderTrail.lastOrNull() ?: return
-        val window = folderDialog ?: return
+    private fun cancelFolderRead() {
+        openFolderRequest++
+        selectingFolder = false
+    }
+
+    private fun reloadOpenFolder() = loadOpenFolder(folderTrail, selecting = false)
+
+    private fun loadOpenFolder(trail: List<FolderLocation>, selecting: Boolean) {
+        val location = trail.lastOrNull() ?: return
+        val window = folderDialog
+        if (!selecting && (selectingFolder || window == null)) return
+        val shelfWidth = if (window == null) checkNotNull(body).width else null
         val request = ++openFolderRequest
+        selectingFolder = selecting
         readFolder(location) { contents, _ ->
-            if (request == openFolderRequest && folderDialog === window && window.dialog.isShowing && contents != openFolderContents) {
-                openFolderContents = contents
-                renderShelfFolder()
-            }
+            if (request != openFolderRequest) return@readFolder
+            selectingFolder = false
+            if (!resumed || page != LauncherPage.SHELF || folderDialog !== window ||
+                window?.dialog?.isShowing == false || !prefs.shelfSources.local) return@readFolder
+            if (folderTrail == trail && openFolderContents == contents) return@readFolder
+            weReadGroup = null
+            folderTrail = trail
+            openFolderContents = contents
+            renderShelfFolder(shelfWidth)
         }
     }
 

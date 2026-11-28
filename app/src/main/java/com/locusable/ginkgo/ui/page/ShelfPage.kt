@@ -8,7 +8,6 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ListView
 import com.locusable.ginkgo.shelf.ShelfEntry
@@ -122,9 +121,6 @@ internal class ShelfFolderWindow(activity: Activity, shelfWidth: Int, goBack: ()
         buttonRole()
         action(stroke = LINE, click = goBack)
     }
-    private val loadingHeight = ((width - panel.paddingLeft - panel.paddingRight -
-        activity.dp(TILE_COLUMN_GAP_DP) * (FOLDER_COLUMNS - 1)) / FOLDER_COLUMNS) * 3 / 2 + activity.dp(48)
-
     init {
         panel.addView(activity.horizontal().apply {
             gravity = Gravity.TOP
@@ -140,51 +136,20 @@ internal class ShelfFolderWindow(activity: Activity, shelfWidth: Int, goBack: ()
         }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         panel.gap(10)
         panel.addView(content, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-        panel.isClickable = true
-        panel.isFocusable = false
-        panel.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        dialog.setContentView(AnchoredShelfFolder(activity, panel).apply {
-            setOnClickListener { dialog.cancel() }
-            isFocusable = false
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        })
+        dialog.setContentView(panel)
     }
 
-    fun prepare(name: String, parentPath: String?, loading: Boolean) {
+    fun prepare(name: String, parentPath: String?) {
         title.text = name
         path.text = parentPath.orEmpty()
         path.visibility = if (parentPath == null) View.GONE else View.VISIBLE
         back.kind = if (parentPath == null) InkGlyph.Kind.CLOSE else InkGlyph.Kind.LEFT
         back.contentDescription = if (parentPath == null) "关闭文件夹，返回书架" else "返回上一级"
-        content.minimumHeight = if (loading) maxOf(content.height, content.minimumHeight)
-            .takeIf { it > 0 } ?: loadingHeight else 0
         content.removeAllViews()
     }
 
     fun show() {
-        dialog.window?.setLayout(width, MATCH_PARENT)
         dialog.show()
-    }
-}
-
-private class AnchoredShelfFolder(context: Context, private val panel: View) : FrameLayout(context) {
-    private val position = LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.TOP)
-    private var viewportHeight = -1
-
-    init { addView(panel, position) }
-
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        if (MeasureSpec.getSize(heightMeasureSpec) != viewportHeight) position.topMargin = 0
-        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
-    }
-
-    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        val height = bottom - top
-        if (viewportHeight != height) {
-            viewportHeight = height
-            // Keep the initial top offset when contents resize; FrameLayout then measures the space below it.
-            position.topMargin = (height - panel.measuredHeight).coerceAtLeast(0) / 2
-        }
-        super.onLayout(changed, left, top, right, bottom)
+        dialog.window?.setLayout(width, WRAP_CONTENT)
     }
 }
