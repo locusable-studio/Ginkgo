@@ -9,11 +9,18 @@ import android.view.View
 /** A single-stroke set that stays legible on monochrome displays. */
 internal class InkGlyph(
     context: Context,
-    private val kind: Kind,
+    kind: Kind,
     private val sizeDp: Int = 22,
     tone: Int = INK,
 ) : View(context) {
-    enum class Kind { APP, HOME, FILE, BOOK, WALLPAPER, SETTINGS, REFRESH, PIN, EYE_OFF, ARROW, LEFT, RIGHT }
+    enum class Kind { APP, HOME, FILE, BOOK, WALLPAPER, SETTINGS, REFRESH, PIN, EYE_OFF, ARROW, LEFT, RIGHT, CLOSE }
+
+    var kind = kind
+        set(value) {
+            if (field == value) return
+            field = value
+            invalidate()
+        }
 
     private val pen = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = tone
@@ -96,6 +103,10 @@ internal class InkGlyph(
             }
             Kind.LEFT -> stroke(canvas, 14, 7, 9, 12, 14, 17)
             Kind.RIGHT -> stroke(canvas, 10, 7, 15, 12, 10, 17)
+            Kind.CLOSE -> {
+                canvas.drawLine(7f, 7f, 17f, 17f, pen)
+                canvas.drawLine(17f, 7f, 7f, 17f, pen)
+            }
             Kind.ARROW -> {
                 stroke(canvas, 8, 16, 16, 8)
                 stroke(canvas, 10, 8, 16, 8, 16, 14)

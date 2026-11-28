@@ -90,9 +90,9 @@ import com.locusable.ginkgo.ui.label
 import com.locusable.ginkgo.ui.page.APP_COLUMNS
 import com.locusable.ginkgo.ui.page.HOME_RECENT_BOOK_LIMIT
 import com.locusable.ginkgo.ui.page.SettingsPage
+import com.locusable.ginkgo.ui.page.ShelfFolderWindow
 import com.locusable.ginkgo.ui.page.ShelfPageModel
 import com.locusable.ginkgo.ui.page.ShelfRowCovers
-import com.locusable.ginkgo.ui.page.shelfFolderWidth
 import com.locusable.ginkgo.ui.page.showAbout
 import com.locusable.ginkgo.ui.page.showApps
 import com.locusable.ginkgo.ui.page.showHome
@@ -168,7 +168,7 @@ class InkActivity : Activity() {
     private var folderRequest = 0
     private var openFolderContents: FolderContents = FolderContents.Loading
     private var openFolderRequest = 0
-    private var folderDialog: Dialog? = null
+    private var folderDialog: ShelfFolderWindow? = null
     private var folderViewport: ShelfViewport? = null
     private var renderedFolderId: String? = null
     private val folderScroll = mutableMapOf<String, TileScroll>()
@@ -617,15 +617,15 @@ class InkActivity : Activity() {
             local == FolderContents.PermissionRequired -> null
             else -> "暂无可显示的书籍"
         } else null
-        return content.showShelfGrid(ShelfPageModel(null, null, local == FolderContents.PermissionRequired, message, entries),
+        return content.showShelfGrid(ShelfPageModel(local == FolderContents.PermissionRequired, message, entries),
             sort, onlineOpened, hidden)
     }
 
     private fun LinearLayout.showShelfGrid(
         model: ShelfPageModel, sort: ShelfSort, onlineOpened: Map<String, Long>, hidden: HiddenBooks,
-    ): ListView? = showShelf(model, ::backFromShelfFolder, ::requestBooksPermission) { entry, covers ->
+    ): ListView? = showShelf(model, ::requestBooksPermission) { entry, covers ->
         shelfTile(entry, covers.local, covers.online, sort, onlineOpened,
-            hiddenOnHome = entry in hidden, rootShelf = model.folderName == null)
+            hiddenOnHome = entry in hidden, rootShelf = !model.inFolder)
     }
 
     private fun openShelfGroup(group: String) {
@@ -691,8 +691,7 @@ class InkActivity : Activity() {
         when {
             !entry.directory -> bindBookCover(entry, cover, localCovers, onlineCovers)
             entry is ShelfEntry.Local -> localCovers.add(ShelfCovers.Target.Directory(entry.item.location) { faces ->
-                if (faces.isNotEmpty()) cover.showCoverMosaic(faces, markFolder = rootShelf)
-                else if (rootShelf) cover.showShelfPlaceholder(InkGlyph.Kind.FILE)
+                if (faces.isNotEmpty() || rootShelf) cover.showCoverMosaic(faces, markFolder = rootShelf)
                 else cover.showCoverTitle(entry.displayTitle)
             })
             entry is ShelfEntry.Online -> {
@@ -767,10 +766,10 @@ class InkActivity : Activity() {
             if (hiddenOnHome) append("，已在首页隐藏")
         }
         val artwork = FrameLayout(this@InkActivity).apply {
-            if (rootShelf) showShelfPlaceholder(if (directory) InkGlyph.Kind.FILE else InkGlyph.Kind.BOOK)
-            else showCoverTitle(name)
+            if (rootShelf && directory) showCoverMosaic(emptyList(), markFolder = true)
+            else showCoverTitle(name, rootShelf = rootShelf)
         }
-        val cover = CoverFrame().apply {
+        val cover = CoverFrame(outlined = !rootShelf || !directory).apply {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
             addView(artwork, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             if (hiddenOnHome) addView(InkGlyph(this@InkActivity, InkGlyph.Kind.EYE_OFF, sizeDp = 17).apply {
@@ -790,10 +789,8 @@ class InkActivity : Activity() {
                     LinearLayout.LayoutParams(dp(17), dp(20)).apply { marginEnd = dp(4) })
             }
             addView(label(name, LABEL_TEXT_SP, face = if (directory) Typeface.DEFAULT_BOLD else Typeface.DEFAULT).apply {
-                if (rootShelf) {
-                    gravity = Gravity.TOP or Gravity.START
-                    setLines(2)
-                } else maxLines = 2
+                if (rootShelf) includeFontPadding = false
+                maxLines = 2
                 ellipsize = TextUtils.TruncateAt.END
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
@@ -801,8 +798,8 @@ class InkActivity : Activity() {
         action(click = open)
     }
 
-    private inner class CoverFrame : FrameLayout(this@InkActivity) {
-        init { foreground = paperShape(COVER_OUTLINE, Color.TRANSPARENT) }
+    private inner class CoverFrame(outlined: Boolean = true) : FrameLayout(this@InkActivity) {
+        init { if (outlined) foreground = paperShape(COVER_OUTLINE, Color.TRANSPARENT) }
 
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
             val width = MeasureSpec.getSize(widthMeasureSpec)
@@ -811,20 +808,20 @@ class InkActivity : Activity() {
         }
     }
 
-    private fun FrameLayout.showCoverTitle(name: String, compact: Boolean = false) {
+    private fun FrameLayout.showCoverTitle(name: String, compact: Boolean = false, rootShelf: Boolean = false) {
         removeAllViews()
         background = paperShape(if (compact) COVER_OUTLINE else Color.TRANSPARENT, 0xFFF7F7F7.toInt())
         val inset = dp(if (compact) 4 else 9)
         addView(column().apply {
             setPaddingRelative(inset, dp(if (compact) 7 else 14), inset, 0)
-            if (!compact) {
+            if (!compact && !rootShelf) {
                 addView(paperRule(0xFF8A8A8A.toInt()), LinearLayout.LayoutParams(dp(14), dp(1)))
                 gap(6)
             }
-            addView(label(bookTitlePreview(name), if (compact) 9f else 12f,
-                face = Typeface.create("serif", Typeface.NORMAL), tone = SOFT_INK).apply {
+            addView(label(bookTitlePreview(name), if (compact) 9f else if (rootShelf) LABEL_TEXT_SP else 12f,
+                face = Typeface.create("serif", Typeface.NORMAL), tone = if (rootShelf) INK else SOFT_INK).apply {
                 gravity = Gravity.TOP or Gravity.START
-                maxLines = 2
+                maxLines = if (rootShelf) 3 else 2
                 ellipsize = TextUtils.TruncateAt.END
                 setLineSpacing(dp(if (compact) 1 else 2).toFloat(), 1f)
             }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
@@ -842,17 +839,23 @@ class InkActivity : Activity() {
         }, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
     }
 
-    private fun FrameLayout.showShelfPlaceholder(glyph: InkGlyph.Kind) {
-        removeAllViews()
-        setBackgroundColor(PRESS_FILL)
-        addView(InkGlyph(context, glyph, sizeDp = 30, tone = SOFT_INK), FrameLayout.LayoutParams(dp(38), dp(38), Gravity.CENTER))
-    }
-
     private fun FrameLayout.showCoverMosaic(faces: List<ShelfCovers.Face>, fileNames: Boolean = true, markFolder: Boolean = false) {
         removeAllViews()
-        setBackgroundColor(0xFFE6E6E6.toInt())
+        setBackgroundColor(if (markFolder) Color.TRANSPARENT else 0xFFE6E6E6.toInt())
+        if (markFolder) {
+            addView(View(context).apply { background = paperShape(LINE, PRESS_FILL) },
+                FrameLayout.LayoutParams(dp(26), dp(8), Gravity.TOP or Gravity.START).apply {
+                    topMargin = dp(8)
+                    marginStart = dp(12)
+                })
+        }
         addView(column().apply {
-            repeat(2) { line ->
+            if (markFolder) {
+                background = paperShape(LINE, PRESS_FILL)
+                val inset = dp(4)
+                setPadding(inset, inset, inset, inset)
+            }
+            if (faces.isNotEmpty()) repeat(2) { line ->
                 addView(horizontal().apply {
                     repeat(2) { column ->
                         val panel = FrameLayout(this@InkActivity)
@@ -860,16 +863,17 @@ class InkActivity : Activity() {
                             if (face.bitmap != null) panel.showCoverBitmap(face.bitmap)
                             else panel.showCoverTitle(if (fileNames) face.name.substringBeforeLast('.') else face.name, compact = true)
                         }
-                        addView(panel, LinearLayout.LayoutParams(0, MATCH_PARENT, 1f))
+                        addView(panel, LinearLayout.LayoutParams(0, MATCH_PARENT, 1f).apply {
+                            if (markFolder && column > 0) marginStart = dp(3)
+                        })
                     }
-                }, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+                }, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f).apply {
+                    if (markFolder && line > 0) topMargin = dp(3)
+                })
             }
-        }, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-        if (markFolder) {
-            addView(InkGlyph(context, InkGlyph.Kind.FILE, sizeDp = 16).apply {
-                setBackgroundColor(Color.WHITE)
-            }, FrameLayout.LayoutParams(dp(28), dp(24), Gravity.TOP or Gravity.START))
-        }
+        }, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT).apply {
+            if (markFolder) setMargins(dp(7), dp(15), dp(7), dp(8))
+        })
     }
 
     private fun navigateFolder(trail: List<FolderLocation>) {
@@ -912,38 +916,33 @@ class InkActivity : Activity() {
             FolderContents.Unavailable -> "无法读取此目录"
             else -> if (group != null) "这个文件夹没有书籍" else "这个目录没有书籍"
         } else null
-        val label = if (folderTrail.size > 1) "返回上一级" else "返回书架"
         val parentPath = if (folderTrail.size > 1) folderTrail.dropLast(1).joinToString(" / ") { it.name } else null
-        val panel = paperDialogPanel(maxHeight = dp(resources.configuration.screenHeightDp * 3 / 4))
-        val list = panel.showShelfGrid(ShelfPageModel(name, label, local == FolderContents.PermissionRequired, message, entries, parentPath),
-            sort, onlineOpened, hidden)
-        folderViewport = list?.let {
-            panel.addView(it, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-            folderScroll[id]?.let(it::restoreTileScroll)
-            watchShelfRows(it, opened)
-        }
-        renderedFolderId = id
-        val dialog = folderDialog ?: paperDialog().also { window ->
-            folderDialog = window
-            window.setOnDismissListener { if (folderDialog === window) dismissShelfFolder() }
-            window.setOnKeyListener { _, key, event ->
+        val window = folderDialog ?: ShelfFolderWindow(this, checkNotNull(body).width, ::backFromShelfFolder).also { created ->
+            folderDialog = created
+            created.dialog.setOnDismissListener { if (folderDialog === created) dismissShelfFolder() }
+            created.dialog.setOnKeyListener { _, key, event ->
                 if (key != KeyEvent.KEYCODE_BACK || folderTrail.size <= 1) false else {
                     if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) backFromShelfFolder()
                     true
                 }
             }
         }
-        dialog.setContentView(panel)
-        if (!dialog.isShowing) {
-            val width = panel.shelfFolderWidth(checkNotNull(body).width)
-            dialog.show()
-            dialog.window?.setLayout(width, WRAP_CONTENT)
+        window.prepare(name, parentPath, loading = local == FolderContents.Loading)
+        val list = window.content.showShelfGrid(
+            ShelfPageModel(local == FolderContents.PermissionRequired, message, entries, inFolder = true),
+            sort, onlineOpened, hidden)
+        folderViewport = list?.let {
+            window.content.addView(it, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+            folderScroll[id]?.let(it::restoreTileScroll)
+            watchShelfRows(it, opened)
         }
+        renderedFolderId = id
+        if (!window.dialog.isShowing) window.show()
         refreshVisibleShelfCovers()
     }
 
     private fun dismissShelfFolder(refreshRoot: Boolean = true) {
-        val dialog = folderDialog
+        val dialog = folderDialog?.dialog
         folderDialog = null
         weReadGroup = null
         folderTrail = emptyList()
@@ -973,7 +972,7 @@ class InkActivity : Activity() {
                 if (folderDialog == null) render() else {
                     shelfOrderDirty = true
                     if (orderChanged && folderTrail.isNotEmpty() && openFolderContents is FolderContents.Items &&
-                        folderDialog?.isShowing == true) renderShelfFolder()
+                        folderDialog?.dialog?.isShowing == true) renderShelfFolder()
                 }
             }
         }
@@ -981,9 +980,10 @@ class InkActivity : Activity() {
 
     private fun reloadOpenFolder() {
         val location = folderTrail.lastOrNull() ?: return
+        val window = folderDialog ?: return
         val request = ++openFolderRequest
         readFolder(location) { contents, _ ->
-            if (request == openFolderRequest && folderDialog?.isShowing == true && contents != openFolderContents) {
+            if (request == openFolderRequest && folderDialog === window && window.dialog.isShowing && contents != openFolderContents) {
                 openFolderContents = contents
                 renderShelfFolder()
             }
